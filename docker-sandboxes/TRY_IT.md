@@ -76,9 +76,10 @@ signed in. Chat as usual: the model calls, tools and files all run in the sandbo
 
 - **24-hour sandboxes.** Cloud deletes a sandbox after at most 24 h. While
   Desktop is running, it recreates the sandbox about 35 minutes before expiry
-  on the same volume, repoints the gateway and signs in again. It checks 30 s
-  after launch and then every 30 min. If Desktop was closed when the
-  sandbox expired, the next launch recreates it. Memory, skills, sessions and
+  on the same volume, repoints the gateway and signs in again. It checks at
+  launch and then every 30 min. If Desktop was closed when the sandbox
+  expired, the launch recreates it: the gateway reconnects on its own after a
+  few minutes (the new sandbox has to boot), with no sign-in needed. Memory, skills, sessions and
   cron jobs live on the volume (`Docker-Sandbox-hermes-home`), so nothing is lost.
 - **Scheduled jobs run in the cloud**, even when Desktop is closed, as long as
   the sandbox exists. Jobs due while no sandbox exists (Desktop closed past

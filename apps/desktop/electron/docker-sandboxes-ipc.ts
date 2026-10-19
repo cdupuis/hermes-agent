@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { ipcMain, type Session, type WebContents } from 'electron'
+import { app, ipcMain, type Session, type WebContents } from 'electron'
 
 import { createKeeper, type KeeperRecord, type KeeperStore } from './docker-sandboxes-keeper'
 import {
@@ -30,7 +30,6 @@ import { createSandboxesApi } from './docker-sandboxes-sdk'
  * gateway simply is not kept alive.
  */
 
-const KEEPER_FIRST_PASS_MS = 30_000
 const KEEPER_INTERVAL_MS = 30 * 60_000
 
 export interface DockerSandboxesIpcDeps {
@@ -169,7 +168,9 @@ export function registerDockerSandboxesIpc(deps: DockerSandboxesIpcDeps): void {
   })
 
   const runKeeper = () => void keeper.check().catch(() => undefined)
-  setTimeout(runKeeper, KEEPER_FIRST_PASS_MS).unref?.()
+  // At launch, not later: an expired sandbox's dead URL is what Desktop dials until the pass
+  // re-points it, and signing in needs the cookie partitions, which exist once the app is ready.
+  void app.whenReady().then(runKeeper)
   setInterval(runKeeper, KEEPER_INTERVAL_MS).unref?.()
 
   ipcMain.handle(

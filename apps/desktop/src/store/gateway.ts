@@ -22,12 +22,8 @@ import {
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
 import { traceIdentityChange } from '@/lib/identity-trace'
 import { isPermanentLocalGatewayEnsureError } from '@/lib/local-gateway-ensure-failure'
-import {
-  isTimeoutError,
-  RECONNECT_ATTEMPT_TIMEOUT_MS,
-  SOURCE_SWITCH_DIAL_TIMEOUT_MS,
-  withTimeout
-} from '@/lib/with-timeout'
+import { RECONNECT_ATTEMPT_TIMEOUT_MS, SOURCE_SWITCH_DIAL_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
+import { isStalledDialError, SECONDARY_STALLED_DIAL_BUDGET } from '@/store/gateway-dial-policy'
 import { notifyError, RECOVERY_ACTIONS } from '@/store/notifications'
 import { markNativeNotifyBaseline } from '@/store/notify-baseline'
 import { setConnection, setGatewayState } from '@/store/session'
@@ -353,7 +349,11 @@ function dispatchServerRequest(request: ServerRequest, profile: string, connecti
     return false
   }
 
-  g.config.onServerRequest({ ...request, ...(connectionId ? { connectionId } : {}), profile: canonicalOwnerProfile(request) ?? profile })
+  g.config.onServerRequest({
+    ...request,
+    ...(connectionId ? { connectionId } : {}),
+    profile: canonicalOwnerProfile(request) ?? profile
+  })
 
   return true
 }
@@ -846,28 +846,6 @@ async function openSecondary(entry: Secondary): Promise<void> {
   }
 }
 
-// Consecutive STALLED automatic dials (a pool-slot wait or the 20s dial
-// timeout, never a fast transport error) before a secondary parks. A
-// tile-pinned scope stays wantOpen for the tile's lifetime, so an owner
-// backend that keeps losing its slot wait otherwise re-queues a background
-// spawn on every backoff tick forever — the queue/timeout treadmill in
-// #103375. Fast failures (a gateway restarting, ECONNREFUSED) keep the
-// ordinary unbounded backoff: they cost nothing and the socket must come back
-// on its own. Parking keeps the entry; any explicit open of the scope
-// (requestGatewayForAgent, openGatewayForAgent, ensureGatewayForAgent,
-// ensureActiveGatewayOpen) re-arms it with a fresh budget.
-const SECONDARY_STALLED_DIAL_BUDGET = 3
-
-function isStalledDialError(error: unknown): boolean {
-  if (isTimeoutError(error)) {
-    return true
-  }
-
-  const message = error instanceof Error ? error.message : String(error ?? '')
-
-  return message.includes('timed out while waiting for a free slot')
-}
-
 function rearmSecondary(entry: Secondary, priority: SpawnPriority = 'foreground'): void {
   const reauthError = g.reauthFailures.get(entry.scope)?.error
 
@@ -1076,7 +1054,10 @@ function createSecondary(profile: string, connectionId: null | string = null): S
   // sockets prove it through this closure. Stamp before registry fan-in,
   // never promote an arbitrary wire `profile` field into ownership.
   entry.offEvent = gateway.onEvent(event => {
-    const scopedEvent = stampSecondaryProfileOwner({ ...event, ...(connectionId ? { connectionId } : {}) }, canonicalOwnerProfile(event) ?? profile)
+    const scopedEvent = stampSecondaryProfileOwner(
+      { ...event, ...(connectionId ? { connectionId } : {}) },
+      canonicalOwnerProfile(event) ?? profile
+    )
 
     g.config?.onEvent(scopedEvent)
     releaseTerminalTurnLease(entry.scope, event)
@@ -1720,9 +1701,14 @@ function releaseTerminalTurnLease(scope: string, event: GatewayEvent): void {
 
   const key = turnLeaseKey(scope, sessionId)
 
-  if (!acceptExecutionEvent(turnExecutionAuthorities, key, event.type, event)) {return}
+  if (!acceptExecutionEvent(turnExecutionAuthorities, key, event.type, event)) {
+    return
+  }
 
-  if (event.type === 'message.start' || (event.type === 'session.info' && (event.payload as Record<string, unknown>)?.running === true)) {
+  if (
+    event.type === 'message.start' ||
+    (event.type === 'session.info' && (event.payload as Record<string, unknown>)?.running === true)
+  ) {
     // The gateway emits settled session.info before immediately chaining a
     // queued/goal follow-up. Keep the same route alive for that next turn.
     cancelTurnLeaseRelease(key)
@@ -2456,7 +2442,14 @@ export function disposeSecondariesForConnection(connectionId: string, opts: { re
     const wasActive = key === g.activeKey
     activeInvalidated ||= wasActive
 
-    if (opts.redial && (entry.activeRequests > 0 || relayRetained(entry) || foregroundPinned(entry))) {
+    // Only a live socket has owners worth draining. One that is down (its endpoint gone, its
+    // sign-in refused) can only recover on the new target; deferring would strand the open
+    // chat on the dead endpoint until the user navigates away.
+    if (
+      opts.redial &&
+      isOpen(entry.gateway) &&
+      (entry.activeRequests > 0 || relayRetained(entry) || foregroundPinned(entry))
+    ) {
       entry.pendingConnectionRedial = true
 
       continue

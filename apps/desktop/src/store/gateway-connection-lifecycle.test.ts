@@ -279,6 +279,28 @@ describe('disposeSecondariesForConnection', () => {
     expect(foregroundSocket.close).toHaveBeenCalledOnce()
   })
 
+  it('redials a foreground socket at once when it is down: there is nothing to drain', async () => {
+    // A recreated cloud sandbox: the old endpoint is gone and its socket closed, while the
+    // user's chat on it stays open. Waiting for that chat to close would never reconnect.
+    const foregroundScopes = new Set(['conn:homelab::default'])
+
+    const getConnectionFor = vi.fn(async ({ connectionId, profile }: { connectionId: string; profile: string }) =>
+      descriptorFor(connectionId, profile)
+    )
+
+    configureGatewayRegistry({ foregroundScopes: () => foregroundScopes, onEvent: vi.fn() } as never)
+    installDesktop({ getConnectionFor })
+
+    await ensureGatewayForAgent('homelab', 'default')
+    const deadSocket = gatewayMocks.instances[0]
+    deadSocket.connectionState = 'closed'
+
+    disposeSecondariesForConnection('homelab', { redial: true })
+
+    await vi.waitFor(() => expect(gatewayMocks.connect).toHaveBeenCalledTimes(2))
+    expect(deadSocket.close).toHaveBeenCalledOnce()
+  })
+
   it('is a no-op for blank or unknown connection ids', async () => {
     installDesktop({
       getConnectionFor: vi.fn(async ({ connectionId, profile }: { connectionId: string; profile: string }) =>
@@ -787,7 +809,12 @@ describe('secondary stalled-dial budget', () => {
     ]) {
       closeSecondaryGateways()
       gatewayMocks.instances.length = 0
-      const getConnectionFor = vi.fn().mockResolvedValueOnce(descriptorFor('homelab', 'bot-a')).mockRejectedValue(new Error(permanent))
+
+      const getConnectionFor = vi
+        .fn()
+        .mockResolvedValueOnce(descriptorFor('homelab', 'bot-a'))
+        .mockRejectedValue(new Error(permanent))
+
       installDesktop({ getConnectionFor })
 
       await ensureGatewayForAgent('homelab', 'bot-a')
