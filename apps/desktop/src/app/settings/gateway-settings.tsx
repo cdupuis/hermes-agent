@@ -20,6 +20,7 @@ import { reestablishCloudAgentSession } from '@/lib/cloud-agent-session'
 import { ExternalLink } from '@/lib/external-link'
 import {
   AlertCircle,
+  Box,
   Check,
   Cloud,
   FileText,
@@ -46,6 +47,7 @@ import { notify, notifyError, readableError } from '@/store/notifications'
 import { cloudTeamChanged, reconnectMovedCloudAgent } from './cloud-team-change'
 import { ConnectionsRegistrySection } from './connections-registry'
 import { CONTROL_TEXT } from './constants'
+import { DockerSandboxesPanel } from './docker-sandboxes-panel'
 import { ManagedUpdatesSection } from './managed-updates-section'
 import { EmptyState, ListRow, Pill, SettingsContent, SettingsSkeleton, ToggleRow } from './primitives'
 import { SETTING_IDS, settingElementId } from './settings-manifest'
@@ -166,6 +168,84 @@ function ModeCard({
   )
 }
 
+/** The connection-mode cards. Docker Cloud Sandboxes sits beside them as a
+ * creation flow; it never becomes the saved mode. */
+function ConnectionModeCards({
+  docker,
+  setDocker,
+  setState,
+  state
+}: {
+  docker: boolean
+  setDocker: (open: boolean) => void
+  setState: React.Dispatch<React.SetStateAction<GatewaySettingsState>>
+  state: GatewaySettingsState
+}) {
+  const { t } = useI18n()
+  const g = t.settings.gateway
+  const d = t.settings.dockerSandboxes
+
+  const onSelect = (mode: Mode | 'docker') => {
+    setDocker(mode === 'docker')
+
+    if (mode !== 'docker') {
+      setState(current => ({ ...current, mode }))
+    }
+  }
+
+  return (
+    <div className="grid auto-rows-fr grid-cols-1 gap-2 sm:grid-cols-2 min-[72rem]:grid-cols-5">
+      <ModeCard
+        active={!docker && state.mode === 'local'}
+        description={g.localDesc}
+        disabled={state.envOverride}
+        icon={Monitor}
+        onSelect={() => onSelect('local')}
+        title={g.localTitle}
+      />
+      <ModeCard
+        active={!docker && state.mode === 'cloud'}
+        description={g.cloudDesc}
+        disabled={state.envOverride}
+        icon={Cloud}
+        onSelect={() => onSelect('cloud')}
+        title={g.cloudTitle}
+      />
+      <ModeCard
+        active={docker}
+        description={d.modeDesc}
+        disabled={state.envOverride}
+        icon={Box}
+        onSelect={() => onSelect('docker')}
+        title={d.title}
+      />
+      <ModeCard
+        active={!docker && state.mode === 'remote'}
+        description={g.remoteDesc}
+        disabled={state.envOverride}
+        hint={g.remoteAuthHint}
+        icon={Globe}
+        onSelect={() => onSelect('remote')}
+        title={g.remoteTitle}
+      />
+      <ModeCard
+        active={!docker && state.mode === 'ssh'}
+        description={g.sshDesc}
+        disabled={state.envOverride}
+        hint={g.sshTrustHint}
+        icon={Terminal}
+        onSelect={() => onSelect('ssh')}
+        title={g.sshTitle}
+      />
+    </div>
+  )
+}
+
+/** The selected mode's form, or the Docker Cloud Sandboxes creation panel in its place. */
+function ModePanels({ children, docker }: { children: React.ReactNode; docker: boolean }) {
+  return docker ? <DockerSandboxesPanel /> : <>{children}</>
+}
+
 interface GatewaySettingsProps {
   embedded?: boolean
   subpage?: string
@@ -252,6 +332,8 @@ function GatewayManagedUpdates() {
 // Diagnostics row are redundant there (the card owns its header + a single
 // reconnect action), so only the connection controls render.
 function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean; standalone: boolean }) {
+  // Docker Cloud Sandboxes is a creation flow, not a persisted mode: it ends in a saved remote.
+  const [dockerPanel, setDockerPanel] = useState(false)
   const { t } = useI18n()
   const g = t.settings.gateway
   const [loading, setLoading] = useState(true)
@@ -1083,402 +1165,373 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
         <div className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
           {g.modeTitle}
         </div>
-        <div className="grid auto-rows-fr grid-cols-1 gap-2 sm:grid-cols-2 min-[72rem]:grid-cols-4">
-          <ModeCard
-            active={state.mode === 'local'}
-            description={g.localDesc}
-            disabled={state.envOverride}
-            icon={Monitor}
-            onSelect={() => setState(current => ({ ...current, mode: 'local' }))}
-            title={g.localTitle}
-          />
-          <ModeCard
-            active={state.mode === 'cloud'}
-            description={g.cloudDesc}
-            disabled={state.envOverride}
-            icon={Cloud}
-            onSelect={() => setState(current => ({ ...current, mode: 'cloud' }))}
-            title={g.cloudTitle}
-          />
-          <ModeCard
-            active={state.mode === 'remote'}
-            description={g.remoteDesc}
-            disabled={state.envOverride}
-            hint={g.remoteAuthHint}
-            icon={Globe}
-            onSelect={() => setState(current => ({ ...current, mode: 'remote' }))}
-            title={g.remoteTitle}
-          />
-          <ModeCard
-            active={state.mode === 'ssh'}
-            description={g.sshDesc}
-            disabled={state.envOverride}
-            hint={g.sshTrustHint}
-            icon={Terminal}
-            onSelect={() => setState(current => ({ ...current, mode: 'ssh' }))}
-            title={g.sshTitle}
-          />
-        </div>
+        <ConnectionModeCards docker={dockerPanel} setDocker={setDockerPanel} setState={setState} state={state} />
       </div>
 
-      {/* Hermes Cloud panel: one portal sign-in, then a discovered-agent picker
+      <ModePanels docker={dockerPanel}>
+        {/* Hermes Cloud panel: one portal sign-in, then a discovered-agent picker
           whose selection drives the silent per-agent cascade + a cloud
           connection. Replaces the URL/token form while in cloud mode. */}
-      {state.mode === 'cloud' && !state.envOverride ? (
-        <div className="mt-5 grid gap-1">
-          {savedCloudConnections.length > 0 ? (
-            <div className="mb-4 grid gap-1">
-              <div className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
-                {g.cloudSavedTitle}
-              </div>
-              <p className="mb-2 text-xs text-muted-foreground">{g.cloudSavedDesc}</p>
-              {savedCloudConnections.map(connection => (
-                <div data-slot="saved-cloud-gateway" key={connection.id}>
-                  <ListRow
-                    action={
-                      activeConnectionId === connection.id ? (
-                        <Pill tone="primary">
-                          <Check className="size-3" />
-                          {g.cloudActive}
-                        </Pill>
-                      ) : (
-                        <Button
-                          disabled={cloudConnectingId !== null}
-                          onClick={() => void activateSavedCloud(connection.id, connection.url)}
-                          size="sm"
-                          variant="outline"
-                        >
-                          {cloudConnectingId === connection.id ? <Loader2 className="animate-spin" /> : null}
-                          {g.cloudUseSaved}
-                        </Button>
-                      )
-                    }
-                    description={connection.url}
-                    title={connection.label}
-                  />
+        {state.mode === 'cloud' && !state.envOverride ? (
+          <div className="mt-5 grid gap-1">
+            {savedCloudConnections.length > 0 ? (
+              <div className="mb-4 grid gap-1">
+                <div className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
+                  {g.cloudSavedTitle}
                 </div>
-              ))}
-            </div>
-          ) : null}
-          <ListRow
-            action={
-              cloudSignedIn ? (
-                <div className="flex items-center gap-2">
-                  <Pill tone="primary">
-                    <Check className="size-3" /> {g.cloudSignedIn}
-                  </Pill>
-                  <Button disabled={cloudSigningIn} onClick={() => void cloudSignOut()} variant="outline">
-                    {cloudSigningIn ? <Loader2 className="animate-spin" /> : null}
-                    {g.signOut}
-                  </Button>
-                </div>
-              ) : (
-                <Button disabled={cloudSigningIn} onClick={() => void cloudSignIn()}>
-                  {cloudSigningIn ? <Loader2 className="animate-spin" /> : <LogIn />}
-                  {g.cloudSignIn}
-                </Button>
-              )
-            }
-            description={cloudSignedIn ? g.cloudSignedInDesc : g.cloudNeedsSignIn}
-            title={g.cloudSignInTitle}
-          />
-
-          {cloudSignedIn ? (
-            cloudOrgs.length > 0 && !cloudOrg ? (
-              // Multi-org user who hasn't picked an org yet: show the org picker
-              // instead of the agent list. Selecting one re-runs discovery
-              // scoped to it.
-              <div className="mt-3">
-                <div className="mb-2 text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
-                  {g.cloudOrgPickerTitle}
-                </div>
-                <div className="grid gap-1">
-                  {cloudOrgs.map(orgEntry => (
+                <p className="mb-2 text-xs text-muted-foreground">{g.cloudSavedDesc}</p>
+                {savedCloudConnections.map(connection => (
+                  <div data-slot="saved-cloud-gateway" key={connection.id}>
                     <ListRow
                       action={
-                        <Button onClick={() => selectCloudOrg(orgEntry)} size="sm">
-                          {g.cloudOrgSelect}
-                        </Button>
+                        activeConnectionId === connection.id ? (
+                          <Pill tone="primary">
+                            <Check className="size-3" />
+                            {g.cloudActive}
+                          </Pill>
+                        ) : (
+                          <Button
+                            disabled={cloudConnectingId !== null}
+                            onClick={() => void activateSavedCloud(connection.id, connection.url)}
+                            size="sm"
+                            variant="outline"
+                          >
+                            {cloudConnectingId === connection.id ? <Loader2 className="animate-spin" /> : null}
+                            {g.cloudUseSaved}
+                          </Button>
+                        )
                       }
-                      description={g.cloudOrgRole(orgEntry.role)}
-                      key={orgEntry.id}
-                      title={orgEntry.name}
+                      description={connection.url}
+                      title={connection.label}
                     />
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="mt-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
-                    {g.cloudAgentsTitle}
                   </div>
+                ))}
+              </div>
+            ) : null}
+            <ListRow
+              action={
+                cloudSignedIn ? (
                   <div className="flex items-center gap-2">
-                    {cloudOrg ? (
-                      // Let the user switch orgs. Gating on cloudOrgs.length would
-                      // hide this after a restore-open (which discovers straight
-                      // into the saved org and never populates the org list). So
-                      // show it whenever an org is selected: clicking clears the
-                      // org and re-runs discovery with no org arg — a multi-org
-                      // user gets the picker (NAS 409), a single-org user simply
-                      // auto-resolves back to their one org (harmless).
-                      <Button onClick={() => changeCloudOrg()} size="sm" variant="text">
-                        {g.cloudOrgChange}
-                      </Button>
-                    ) : null}
-                    <Button
-                      disabled={cloudDiscover === 'loading'}
-                      onClick={() => void discoverCloud(cloudOrg ?? undefined)}
-                      size="sm"
-                      variant="text"
-                    >
-                      {cloudDiscover === 'loading' ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                      {g.cloudRefresh}
+                    <Pill tone="primary">
+                      <Check className="size-3" /> {g.cloudSignedIn}
+                    </Pill>
+                    <Button disabled={cloudSigningIn} onClick={() => void cloudSignOut()} variant="outline">
+                      {cloudSigningIn ? <Loader2 className="animate-spin" /> : null}
+                      {g.signOut}
                     </Button>
                   </div>
-                </div>
-
-                {cloudDiscover === 'loading' ? (
-                  <div className="flex items-center gap-2 py-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
-                    <Loader2 className="size-4 animate-spin" />
-                    {g.cloudLoadingAgents}
-                  </div>
-                ) : cloudAgents.length === 0 ? (
-                  <div className="flex items-start gap-2 py-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
-                    <AlertCircle className="mt-0.5 size-4 shrink-0" />
-                    <span>
-                      {g.cloudNoAgents.before}
-                      <ExternalLink href="https://portal.nousresearch.com/agents" showExternalIcon={false}>
-                        {g.cloudNoAgents.linkText}
-                      </ExternalLink>
-                      {g.cloudNoAgents.after}
-                    </span>
-                  </div>
                 ) : (
-                  <div className="grid gap-1">
-                    {cloudAgents.map(agent => {
-                      const connected = isConnectedAgent(agent)
-                      const gatewayState = (agent.dashboardGatewayState ?? '').trim()
-                      const hasKnownGatewayState = gatewayState.length > 0 && gatewayState.toLowerCase() !== 'unknown'
+                  <Button disabled={cloudSigningIn} onClick={() => void cloudSignIn()}>
+                    {cloudSigningIn ? <Loader2 className="animate-spin" /> : <LogIn />}
+                    {g.cloudSignIn}
+                  </Button>
+                )
+              }
+              description={cloudSignedIn ? g.cloudSignedInDesc : g.cloudNeedsSignIn}
+              title={g.cloudSignInTitle}
+            />
 
-                      return (
-                        <div
-                          className={cn('rounded-md px-2', connected && 'bg-primary/5 ring-1 ring-primary/25')}
-                          key={agent.id}
-                        >
-                          <ListRow
-                            action={
-                              connected ? (
-                                <Pill tone="primary">
-                                  <Check className="mr-1 inline size-3" />
-                                  {g.cloudActive}
-                                </Pill>
-                              ) : (
-                                <Button
-                                  disabled={!agent.dashboardUrl || cloudConnectingId !== null}
-                                  onClick={() => void connectCloudAgent(agent)}
-                                  size="sm"
-                                >
-                                  {cloudConnectingId === agent.id ? <Loader2 className="animate-spin" /> : null}
-                                  {agent.dashboardUrl
-                                    ? cloudConnectingId === agent.id
-                                      ? g.cloudConnecting
-                                      : savedAgent(agent)
-                                        ? g.cloudUseSaved
-                                        : g.cloudConnect
-                                    : g.cloudAgentProvisioning}
-                                </Button>
-                              )
-                            }
-                            description={hasKnownGatewayState ? g.cloudStatusLabel(gatewayState) : undefined}
-                            title={savedAgent(agent)?.label || agent.name}
-                          />
-                        </div>
-                      )
-                    })}
+            {cloudSignedIn ? (
+              cloudOrgs.length > 0 && !cloudOrg ? (
+                // Multi-org user who hasn't picked an org yet: show the org picker
+                // instead of the agent list. Selecting one re-runs discovery
+                // scoped to it.
+                <div className="mt-3">
+                  <div className="mb-2 text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
+                    {g.cloudOrgPickerTitle}
                   </div>
-                )}
-              </div>
-            )
-          ) : null}
-        </div>
-      ) : null}
+                  <div className="grid gap-1">
+                    {cloudOrgs.map(orgEntry => (
+                      <ListRow
+                        action={
+                          <Button onClick={() => selectCloudOrg(orgEntry)} size="sm">
+                            {g.cloudOrgSelect}
+                          </Button>
+                        }
+                        description={g.cloudOrgRole(orgEntry.role)}
+                        key={orgEntry.id}
+                        title={orgEntry.name}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
+                      {g.cloudAgentsTitle}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {cloudOrg ? (
+                        // Let the user switch orgs. Gating on cloudOrgs.length would
+                        // hide this after a restore-open (which discovers straight
+                        // into the saved org and never populates the org list). So
+                        // show it whenever an org is selected: clicking clears the
+                        // org and re-runs discovery with no org arg — a multi-org
+                        // user gets the picker (NAS 409), a single-org user simply
+                        // auto-resolves back to their one org (harmless).
+                        <Button onClick={() => changeCloudOrg()} size="sm" variant="text">
+                          {g.cloudOrgChange}
+                        </Button>
+                      ) : null}
+                      <Button
+                        disabled={cloudDiscover === 'loading'}
+                        onClick={() => void discoverCloud(cloudOrg ?? undefined)}
+                        size="sm"
+                        variant="text"
+                      >
+                        {cloudDiscover === 'loading' ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                        {g.cloudRefresh}
+                      </Button>
+                    </div>
+                  </div>
 
-      {/* An env-pinned remote (HERMES_DESKTOP_REMOTE_URL) still renders this
+                  {cloudDiscover === 'loading' ? (
+                    <div className="flex items-center gap-2 py-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
+                      <Loader2 className="size-4 animate-spin" />
+                      {g.cloudLoadingAgents}
+                    </div>
+                  ) : cloudAgents.length === 0 ? (
+                    <div className="flex items-start gap-2 py-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
+                      <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                      <span>
+                        {g.cloudNoAgents.before}
+                        <ExternalLink href="https://portal.nousresearch.com/agents" showExternalIcon={false}>
+                          {g.cloudNoAgents.linkText}
+                        </ExternalLink>
+                        {g.cloudNoAgents.after}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="grid gap-1">
+                      {cloudAgents.map(agent => {
+                        const connected = isConnectedAgent(agent)
+                        const gatewayState = (agent.dashboardGatewayState ?? '').trim()
+
+                        const hasKnownGatewayState = gatewayState.length > 0 && gatewayState.toLowerCase() !== 'unknown'
+
+                        return (
+                          <div
+                            className={cn('rounded-md px-2', connected && 'bg-primary/5 ring-1 ring-primary/25')}
+                            key={agent.id}
+                          >
+                            <ListRow
+                              action={
+                                connected ? (
+                                  <Pill tone="primary">
+                                    <Check className="mr-1 inline size-3" />
+                                    {g.cloudActive}
+                                  </Pill>
+                                ) : (
+                                  <Button
+                                    disabled={!agent.dashboardUrl || cloudConnectingId !== null}
+                                    onClick={() => void connectCloudAgent(agent)}
+                                    size="sm"
+                                  >
+                                    {cloudConnectingId === agent.id ? <Loader2 className="animate-spin" /> : null}
+                                    {agent.dashboardUrl
+                                      ? cloudConnectingId === agent.id
+                                        ? g.cloudConnecting
+                                        : savedAgent(agent)
+                                          ? g.cloudUseSaved
+                                          : g.cloudConnect
+                                      : g.cloudAgentProvisioning}
+                                  </Button>
+                                )
+                              }
+                              description={hasKnownGatewayState ? g.cloudStatusLabel(gatewayState) : undefined}
+                              title={savedAgent(agent)?.label || agent.name}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* An env-pinned remote (HERMES_DESKTOP_REMOTE_URL) still renders this
           block: the override pins the URL/mode, but the browser SESSION is not
           env-owned — docs promise "you still sign in from the Gateway settings
           panel" (user-guide/desktop.md). Hiding it left a lapsed session with
           no sign-in anywhere in Settings, and the boot-recovery card routes
           every remote failure here, so "Use local gateway" became the only way
           back in (#114856). The URL input and Save/Test stay env-gated. */}
-      {state.mode === 'remote' ? (
-        <div className="mt-5">
-          <RemoteSetupFields disabled={saving} setup={remote} urlDisabled={state.envOverride} />
-          {remote.credentials.authMode === 'token' && state.remoteTokenPlainText ? (
-            <div className="mt-2 text-sm text-destructive">
-              <div className="font-medium">{g.plainTextStoredTitle}</div>
-              <div>{g.plainTextStoredDesc}</div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+        {state.mode === 'remote' ? (
+          <div className="mt-5">
+            <RemoteSetupFields disabled={saving} setup={remote} urlDisabled={state.envOverride} />
+            {remote.credentials.authMode === 'token' && state.remoteTokenPlainText ? (
+              <div className="mt-2 text-sm text-destructive">
+                <div className="font-medium">{g.plainTextStoredTitle}</div>
+                <div>{g.plainTextStoredDesc}</div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
-      {state.mode === 'ssh' && !state.envOverride ? (
-        <div className="mt-5 grid gap-1">
-          {sshHostSuggestions.length > 0 && !sshCustomHost ? (
-            <ListRow
-              action={
-                <Select
-                  onValueChange={selectHost}
-                  // Only report an actual host here. Leaving the value at the
-                  // empty string shows the placeholder; using SSH_HOST_CUSTOM
-                  // while the dropdown is still rendered would make the FIRST
-                  // "Custom" click a no-op (Radix suppresses onValueChange when
-                  // a controlled value doesn't change), so the custom-host
-                  // input would never mount without a round-trip through
-                  // another option.
-                  value={sshHostSuggestions.includes(state.sshHost) ? state.sshHost : ''}
-                >
-                  <SelectTrigger className={cn('h-8', CONTROL_TEXT)}>
-                    <SelectValue placeholder={g.sshHostPick} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sshHostSuggestions.map(host => (
-                      <SelectItem key={host} value={host}>
-                        {host}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value={SSH_HOST_CUSTOM}>{g.sshHostCustom}</SelectItem>
-                  </SelectContent>
-                </Select>
-              }
-              description={g.sshHostPickDesc}
-              title={g.sshHostPickTitle}
-            />
-          ) : (
+        {state.mode === 'ssh' && !state.envOverride ? (
+          <div className="mt-5 grid gap-1">
+            {sshHostSuggestions.length > 0 && !sshCustomHost ? (
+              <ListRow
+                action={
+                  <Select
+                    onValueChange={selectHost}
+                    // Only report an actual host here. Leaving the value at the
+                    // empty string shows the placeholder; using SSH_HOST_CUSTOM
+                    // while the dropdown is still rendered would make the FIRST
+                    // "Custom" click a no-op (Radix suppresses onValueChange when
+                    // a controlled value doesn't change), so the custom-host
+                    // input would never mount without a round-trip through
+                    // another option.
+                    value={sshHostSuggestions.includes(state.sshHost) ? state.sshHost : ''}
+                  >
+                    <SelectTrigger className={cn('h-8', CONTROL_TEXT)}>
+                      <SelectValue placeholder={g.sshHostPick} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sshHostSuggestions.map(host => (
+                        <SelectItem key={host} value={host}>
+                          {host}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={SSH_HOST_CUSTOM}>{g.sshHostCustom}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                }
+                description={g.sshHostPickDesc}
+                title={g.sshHostPickTitle}
+              />
+            ) : (
+              <ListRow
+                action={
+                  <Input
+                    autoFocus={sshCustomHost}
+                    className={cn('h-8', CONTROL_TEXT)}
+                    onBlur={() => {
+                      // Empty host on blur with suggestions available = the user backed
+                      // out of Custom; return to the dropdown.
+                      if (!state.sshHost.trim() && sshHostSuggestions.length > 0) {
+                        setSshCustomHost(false)
+
+                        return
+                      }
+
+                      void resolveSshHost(state.sshHost)
+                    }}
+                    onChange={event => setState(current => selectSshHost(current, event.target.value))}
+                    value={state.sshHost}
+                  />
+                }
+                description={g.sshHostDesc}
+                title={g.sshHostTitle}
+              />
+            )}
             <ListRow
               action={
                 <Input
-                  autoFocus={sshCustomHost}
                   className={cn('h-8', CONTROL_TEXT)}
-                  onBlur={() => {
-                    // Empty host on blur with suggestions available = the user backed
-                    // out of Custom; return to the dropdown.
-                    if (!state.sshHost.trim() && sshHostSuggestions.length > 0) {
-                      setSshCustomHost(false)
-
-                      return
-                    }
-
-                    void resolveSshHost(state.sshHost)
-                  }}
-                  onChange={event => setState(current => selectSshHost(current, event.target.value))}
-                  value={state.sshHost}
+                  onChange={event => setState(current => ({ ...current, sshUser: event.target.value }))}
+                  placeholder={g.sshUserPlaceholder}
+                  value={state.sshUser}
                 />
               }
-              description={g.sshHostDesc}
-              title={g.sshHostTitle}
+              description={g.sshUserDesc}
+              title={g.sshUserTitle}
             />
-          )}
-          <ListRow
-            action={
-              <Input
-                className={cn('h-8', CONTROL_TEXT)}
-                onChange={event => setState(current => ({ ...current, sshUser: event.target.value }))}
-                placeholder={g.sshUserPlaceholder}
-                value={state.sshUser}
-              />
-            }
-            description={g.sshUserDesc}
-            title={g.sshUserTitle}
-          />
-          <ListRow
-            action={
-              <Input
-                className={cn('h-8', CONTROL_TEXT)}
-                inputMode="numeric"
-                onChange={event =>
-                  setState(current => ({ ...current, sshPort: event.target.value ? Number(event.target.value) : null }))
-                }
-                placeholder="22"
-                value={state.sshPort ?? ''}
-              />
-            }
-            description={g.sshPortDesc}
-            title={g.sshPortTitle}
-          />
-          <ListRow
-            action={
-              <Input
-                className={cn('h-8 font-mono', CONTROL_TEXT)}
-                onChange={event => setState(current => ({ ...current, sshKeyPath: event.target.value }))}
-                value={state.sshKeyPath}
-              />
-            }
-            description={g.sshKeyDesc}
-            title={g.sshKeyTitle}
-          />
-          <ListRow
-            action={
-              <Input
-                className={cn('h-8 font-mono', CONTROL_TEXT)}
-                onChange={event => setState(current => ({ ...current, sshRemoteHermesPath: event.target.value }))}
-                placeholder={g.sshHermesPathPlaceholder}
-                value={state.sshRemoteHermesPath}
-              />
-            }
-            description={g.sshHermesPathDesc}
-            title={g.sshHermesPathTitle}
-          />
-        </div>
-      ) : null}
+            <ListRow
+              action={
+                <Input
+                  className={cn('h-8', CONTROL_TEXT)}
+                  inputMode="numeric"
+                  onChange={event =>
+                    setState(current => ({
+                      ...current,
+                      sshPort: event.target.value ? Number(event.target.value) : null
+                    }))
+                  }
+                  placeholder="22"
+                  value={state.sshPort ?? ''}
+                />
+              }
+              description={g.sshPortDesc}
+              title={g.sshPortTitle}
+            />
+            <ListRow
+              action={
+                <Input
+                  className={cn('h-8 font-mono', CONTROL_TEXT)}
+                  onChange={event => setState(current => ({ ...current, sshKeyPath: event.target.value }))}
+                  value={state.sshKeyPath}
+                />
+              }
+              description={g.sshKeyDesc}
+              title={g.sshKeyTitle}
+            />
+            <ListRow
+              action={
+                <Input
+                  className={cn('h-8 font-mono', CONTROL_TEXT)}
+                  onChange={event => setState(current => ({ ...current, sshRemoteHermesPath: event.target.value }))}
+                  placeholder={g.sshHermesPathPlaceholder}
+                  value={state.sshRemoteHermesPath}
+                />
+              }
+              description={g.sshHermesPathDesc}
+              title={g.sshHermesPathTitle}
+            />
+          </div>
+        ) : null}
 
-      {lastTest ? <div className="mt-4 text-xs text-primary">{lastTest}</div> : null}
+        {lastTest ? <div className="mt-4 text-xs text-primary">{lastTest}</div> : null}
 
-      {/* Test/Save apply to local + remote. Cloud connects via the agent picker
+        {/* Test/Save apply to local + remote. Cloud connects via the agent picker
           above (which applies a cloud connection on select), so its only
           bottom-row action would be redundant — hidden in cloud mode. */}
-      {state.mode !== 'cloud' ? (
-        <div className="mt-6 flex flex-wrap items-center justify-end gap-4">
-          {state.mode === 'remote' ? (
-            <Button
-              className="mr-auto"
-              disabled={state.envOverride || saving || remote.testing || !remote.canTest}
-              onClick={() => void remote.test()}
-              size="sm"
-              variant="text"
-            >
-              {remote.testing ? <Loader2 className="animate-spin" /> : null}
-              {g.testRemote}
+        {state.mode !== 'cloud' ? (
+          <div className="mt-6 flex flex-wrap items-center justify-end gap-4">
+            {state.mode === 'remote' ? (
+              <Button
+                className="mr-auto"
+                disabled={state.envOverride || saving || remote.testing || !remote.canTest}
+                onClick={() => void remote.test()}
+                size="sm"
+                variant="text"
+              >
+                {remote.testing ? <Loader2 className="animate-spin" /> : null}
+                {g.testRemote}
+              </Button>
+            ) : state.mode === 'ssh' ? (
+              <Button
+                className="mr-auto"
+                disabled={testing || !state.sshHost.trim()}
+                onClick={() => void testSsh()}
+                size="sm"
+                variant="text"
+              >
+                {testing ? <Loader2 className="animate-spin" /> : null}
+                {g.sshTestConnection}
+              </Button>
+            ) : null}
+            {embedded ? null : (
+              <Button
+                disabled={state.envOverride || saving}
+                onClick={() => void save(false)}
+                size="sm"
+                variant="textStrong"
+              >
+                {g.saveForRestart}
+              </Button>
+            )}
+            <Button disabled={state.envOverride || saving} onClick={() => void save(true)} size="sm">
+              {saving ? <Loader2 className="animate-spin" /> : null}
+              {g.saveAndReconnect}
             </Button>
-          ) : state.mode === 'ssh' ? (
-            <Button
-              className="mr-auto"
-              disabled={testing || !state.sshHost.trim()}
-              onClick={() => void testSsh()}
-              size="sm"
-              variant="text"
-            >
-              {testing ? <Loader2 className="animate-spin" /> : null}
-              {g.sshTestConnection}
-            </Button>
-          ) : null}
-          {embedded ? null : (
-            <Button
-              disabled={state.envOverride || saving}
-              onClick={() => void save(false)}
-              size="sm"
-              variant="textStrong"
-            >
-              {g.saveForRestart}
-            </Button>
-          )}
-          <Button disabled={state.envOverride || saving} onClick={() => void save(true)} size="sm">
-            {saving ? <Loader2 className="animate-spin" /> : null}
-            {g.saveAndReconnect}
-          </Button>
-        </div>
-      ) : null}
+          </div>
+        ) : null}
+      </ModePanels>
 
       {embedded ? null : (
         <div className="mt-6 grid gap-1">

@@ -1,6 +1,7 @@
 import { defineFieldCopy } from '@/app/settings/field-copy'
 
 import type { TranslationOverrides } from './define-locale'
+import { zhHantDockerSandboxes } from './zh-hant_docker_sandboxes'
 import { zhHantUpdateChannel } from './zh-hant_update_channel'
 
 export const zhHantSettings = {
@@ -15,6 +16,7 @@ export const zhHantSettings = {
   },
 
   settings: {
+    dockerSandboxes: zhHantDockerSandboxes,
     subpages: {
       appearanceTheme: '主題',
       appearanceTypography: '字體與縮放',

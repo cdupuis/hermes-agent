@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-sbx"
+version = "0.1.0"
+description = "Provision a Hermes Agent backend in a Docker Cloud Sandbox for Hermes Desktop"
+requires-python = ">=3.11"
+dependencies = [
+  # Not on PyPI yet; the public export ships the generated package. Pinned to the
+  # v0.44.0 export commit.
+  "docker-sandboxes-api @ git+https://github.com/docker/sandboxes-api@60d7a5b5f68dd1cec9f804757deeee34abdc49e3#subdirectory=gen/python/sandboxes",
+  "PyYAML>=6,<7",
+]
+
+[project.scripts]
+hermes-sbx = "hermes_sbx.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hermes_sbx*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,121 @@
+schemaVersion: "2"
+kind: sandbox
+name: hermes-serve
+displayName: Hermes Agent backend
+description: Hermes Agent as a headless backend (`hermes serve`) for Hermes Desktop, with its state on a persistent volume
+sandbox:
+  # Built from the Dockerfile beside this spec. Pinned by digest: Cloud serves
+  # a cached copy of a moved tag (seen live), so a tag would not pick up a
+  # rebuild. The provisioners can override it (`--image`, the card's Image).
+  image: docker.io/sbxrundocker/hermes-serve-image@sha256:9fc680c3e08e6d51d9111b132bc1eda61862fdfa83821d0bada28d1123d572ed
+  entrypoint: [/usr/local/bin/hermes-start]
+  # Both launch modes run the backend; an interactive attach just shows its log.
+  command:
+    default: [serve, --host, 0.0.0.0, --port, "9119"]
+    interactive: [serve, --host, 0.0.0.0, --port, "9119"]
+agentInstructions:
+  filename: AGENTS.md
+permissions:
+  network:
+    allow:
+      # Model providers (every credential inject domain must also appear here).
+      - api.anthropic.com
+      - platform.claude.com
+      - api.openai.com
+      - openrouter.ai
+      - '*.openrouter.ai'
+      # Provider/model catalogue (agent/models_dev.py) and the provider
+      # availability sweep behind `model.provider: auto`.
+      - models.dev
+      - opencode.ai
+      # Startup update check (`git ls-remote` + the compare API) and
+      # skills metadata reads.
+      - github.com
+      - api.github.com
+      - raw.githubusercontent.com
+      - hermes-agent.nousresearch.com
+credentials:
+  - service: anthropic
+    apiKey:
+      name: ANTHROPIC_API_KEY
+      proxyManaged: true
+      inject:
+        - domain: api.anthropic.com
+          header: x-api-key
+          format: '%s'
+    # A host whose stored anthropic credential is an OAuth login: Hermes reads
+    # Claude Code's store natively and refreshes it in place, so the only
+    # bootstrap needed is dropping the API-key sentinel (hermes-credential-auth).
+    oauth:
+      tokenEndpoint:
+        host: platform.claude.com
+        path: /v1/oauth/token
+      resourceHosts:
+        - api.anthropic.com
+      sentinels:
+        accessToken: sk-ant-oat01-proxy-managed
+        refreshToken: sk-ant-ort01-proxy-managed
+      credentialFile:
+        path: ~/.claude/.credentials.json
+        structure:
+          claudeAiOauth:
+            accessToken: '{{.AccessToken}}'
+            refreshToken: '{{.RefreshToken}}'
+            expiresAt: '{{.ExpiresAt}}'
+            scopes: '{{.Scopes}}'
+  - service: openai
+    apiKey:
+      name: OPENAI_API_KEY
+      proxyManaged: true
+      inject:
+        - domain: api.openai.com
+          header: Authorization
+          format: Bearer %s
+  - service: openrouter
+    apiKey:
+      name: OPENROUTER_API_KEY
+      proxyManaged: true
+      inject:
+        - domain: openrouter.ai
+          header: Authorization
+          format: Bearer %s
+environment:
+  variables:
+    # State on the volume; checkout, tool store and committed dependency
+    # environment live under the install root in the image (see Dockerfile).
+    HERMES_HOME: /home/agent/.hermes
+    HERMES_INSTALL_ROOT: /home/agent/.hermes-install
+    HERMES_RUNTIME_DIR: /home/agent/.hermes-install/tools
+setup:
+  startup:
+    # A freshly allocated volume mounts root-owned; hermes-start waits for
+    # this before it writes anything. The backend itself is the entrypoint,
+    # which Cloud runs at create (a startup hook starting it too raced the
+    # entrypoint for the port and the first-boot login, seen live).
+    - command: [sh, -c, "chown agent:agent /home/agent/.hermes 2>/dev/null || true"]
+      user: "0"
+      description: Re-own the state volume mount root to agent
+    # Cron belongs to the gateway, not to `hermes serve` (serve ticks it only
+    # when Desktop owns the process, which it never does here): without a
+    # gateway, scheduled jobs fire only while a client happens to start one
+    # (seen live: "No scheduler is serving profile 'default'"). A hand-run
+    # gateway never idle-exits; this loop restarts it if it dies, and re-reads
+    # the credential env each time so cron's agent turns get the same provider
+    # keys as the backend. It waits for the entrypoint's first-boot bootstrap.
+    - command:
+        - sh
+        - -c
+        - >-
+          setsid sh -c '
+          export HOME=/home/agent HERMES_HOME=/home/agent/.hermes;
+          while :; do
+          if [ -e "$HERMES_HOME/installs" ] && [ -w "$HERMES_HOME" ]; then
+          mkdir -p "$HERMES_HOME/logs";
+          ( [ -f "$HERMES_HOME/credential-auth.env" ] && . "$HERMES_HOME/credential-auth.env";
+          exec "$HOME/.local/bin/hermes" gateway run ) >>"$HERMES_HOME/logs/gateway-run.log" 2>&1 </dev/null;
+          fi;
+          sleep 5;
+          done' >/dev/null 2>&1 </dev/null &
+      user: "1000"
+      background: true
+      description: Run the Hermes gateway that owns cron (restarted if it exits)

@@ -318,6 +318,16 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     discover: org => ipcRenderer.invoke('hermes:cloud:discover', org),
     agentSignIn: dashboardUrl => ipcRenderer.invoke('hermes:cloud:agent-sign-in', dashboardUrl)
   },
+  // Docker Cloud Sandboxes card (electron/docker-sandboxes-ipc.ts).
+  dockerSandboxes: {
+    provision: input => ipcRenderer.invoke('hermes:dockerSandboxes:provision', input),
+    onProgress: callback => {
+      const listener = (_event, step) => callback(step)
+      ipcRenderer.on('hermes:dockerSandboxes:progress', listener)
+
+      return () => ipcRenderer.removeListener('hermes:dockerSandboxes:progress', listener)
+    }
+  },
   profile: {
     getDefault: () => ipcRenderer.invoke('hermes:profile:default:get'),
     setDefault: (route: DesktopProfileRoute) => ipcRenderer.invoke('hermes:profile:default:set', route),

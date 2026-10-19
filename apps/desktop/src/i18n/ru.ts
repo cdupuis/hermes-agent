@@ -5,12 +5,14 @@ import { ruAuxTasks } from './ru_aux_tasks'
 import { ruBoot } from './ru_boot'
 import { ruClarify } from './ru_clarify'
 import { ruConnectors } from './ru_connectors'
+import { ruDockerSandboxes } from './ru_docker_sandboxes'
 import { ruFirstRun } from './ru_first_run'
 import { ruModelMenu } from './ru_model_menu'
 import { ruNotices } from './ru_notices'
 import { ruOnboarding } from './ru_onboarding'
 import { ruPluginSettings } from './ru_plugins'
 import { ruProjects } from './ru_projects'
+import { ruSettingsNotifications } from './ru_settings_notifications'
 import { ruSharedMetrics } from './ru_shared_metrics'
 import { ruThemePicker } from './ru_theme_picker'
 import { ruUpdateChannel } from './ru_update_channel'
@@ -351,6 +353,7 @@ export const ruOverrides = {
     noResults: 'Языки не найдены'
   },
   settings: {
+    dockerSandboxes: ruDockerSandboxes,
     subpages: {
       appearanceTheme: 'Тема',
       appearanceTypography: 'Шрифты и масштаб',
@@ -429,52 +432,7 @@ export const ruOverrides = {
       plugins: 'Плагины'
     },
     plugins: ruPluginSettings.plugins,
-    notifications: {
-      title: 'Уведомления',
-      intro: 'Системные уведомления (не всплывающие внутри приложения). Настраивается для каждого устройства.',
-      enableAll: 'Включить уведомления',
-      enableAllDesc: 'Если выключено — все уведомления ниже будут заглушены.',
-      focusedHint: 'Оповещения о завершении срабатывают только пока Hermes в фоне.',
-      kinds: {
-        approval: {
-          label: 'Нужно одобрение',
-          description: 'Команда ожидает вашего одобрения или отклонения.'
-        },
-        input: {
-          label: 'Нужен ввод',
-          description: 'Hermes задал вопрос или требует пароль/секрет.'
-        },
-        turnDone: {
-          label: 'Ответ готов',
-          description: 'Ход завершился, пока Hermes был в фоне.'
-        },
-        turnError: {
-          label: 'Ход не удался',
-          description: 'Ошибки фоновых ходов.'
-        },
-        backgroundDone: {
-          label: 'Фоновая задача завершена',
-          description: 'Фоновая команда терминала выполнена.'
-        },
-        credits: {
-          label: 'Оповещения о кредитах',
-          description: 'Доступ к кредитам приостановлен или восстановлен.'
-        },
-        plugin: {
-          label: 'Уведомления плагинов',
-          description: 'Плагин приложения отправил уведомление, пока Hermes был в фоне.'
-        }
-      },
-      test: 'Отправить тестовое уведомление',
-      testTitle: 'Hermes',
-      testBody: 'Уведомления работают.',
-      testSent:
-        'Тест отправлен. Если ничего не появилось, проверьте разрешения на уведомления в системе и режим «Не беспокоить».',
-      testUnsupported: 'Эта система не поддерживает системные уведомления.',
-      completionSoundTitle: 'Звук завершения',
-      completionSoundDesc: 'Воспроизводится, когда ход агента завершён. Выберите пресет и прослушайте здесь.',
-      completionSoundPreview: 'Прослушать'
-    },
+    notifications: ruSettingsNotifications,
     sections: {
       model: 'Модель',
       chat: 'Чат',

@@ -43,6 +43,7 @@ import type { Session } from 'electron'
 
 import { type ActiveRuntimeState, classifyActiveRuntime } from './active-runtime-state'
 import { HERMES_API_EXPECTED_404 } from './api-expected-404'
+import { formatApiRequestFailure } from './api-request-log'
 import {
   destroyKeepaliveAgents,
   htmlResponseError,
@@ -245,6 +246,7 @@ import {
 } from './desktop-uninstall'
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { preReadyDockLaunchSteps } from './dock-launch-order'
+import { registerDockerSandboxesIpc } from './docker-sandboxes-ipc'
 import { embedHostOrigin } from './embed-host'
 import { installEmbedReferer } from './embed-referer'
 import { createAmbientClaimArbiter } from './event-dedupe'
@@ -640,6 +642,7 @@ import {
 import { startUpdateRelaunchWaiter } from './updater/relaunch-waiter'
 import { preflightStateDb } from './updater/state-db-preflight'
 import { createStoreStrategy } from './updater/store-client'
+import { filenameFromUrl } from './url-filename'
 import { isExternalVenvHolder, isHermesOwnedVenvDaemon } from './venv-holder-select'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
@@ -5630,17 +5633,6 @@ function extensionForMimeType(mimeType) {
   }
 
   return ''
-}
-
-function filenameFromUrl(rawUrl, fallback = 'image') {
-  try {
-    const parsed = new URL(rawUrl)
-    const base = path.basename(decodeURIComponent(parsed.pathname || ''))
-
-    return base && base.includes('.') ? base : fallback
-  } catch {
-    return fallback
-  }
 }
 
 async function resourceBufferFromUrl(rawUrl) {
@@ -16509,20 +16501,6 @@ async function handleHermesApiRequest(request) {
   return response
 }
 
-// Format an api-request failure for desktop.log. The renderer only ever sees
-// the invoke rejection; the real stack lives here in main, so persist it
-// before rethrowing. Clamp: paths and error detail must not bloat the log.
-function formatApiRequestFailure(
-  request: { method?: string; path?: string } | null | undefined,
-  error: unknown
-): string {
-  const method = String(request?.method ?? 'GET').toUpperCase()
-  const path = String(request?.path ?? '(no path)').slice(0, 500)
-  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
-
-  return `[hermes:api ${method} ${path}] ${detail}`.slice(0, 6000)
-}
-
 ipcMain.handle('hermes:api', async (_event, request) => {
   // Hold the deletion gate for BOTH profile deletes and renames: a concurrent
   // renderer reconnect entering ensureBackend() mid-mutation would otherwise
@@ -17315,6 +17293,20 @@ registerChallengeWindowIpc({
   getSession: () => session.fromPartition(CHALLENGE_PARTITION),
   resolvePortalBaseUrl,
   createWindow: options => new BrowserWindow(options),
+  rememberLog
+})
+
+// Docker Cloud Sandboxes card: provision a backend, register it as a cookie-auth remote, sign it in.
+registerDockerSandboxesIpc({
+  saveConnection: input => saveRegistryConnection(input),
+  findRemoteByLabel: label =>
+    readDesktopConnectionsRegistry().connections.find(c => c.kind === 'remote' && c.label === label)?.id,
+  connectionExists: id => readDesktopConnectionsRegistry().connections.some(c => c.id === id),
+  sessionForConnection: (url, connectionId) => getOauthSessionForUrl(url, { connectionId }),
+  hasSessionCookie: (url, connectionId) => hasOauthSessionCookie(url, { connectionId }),
+  encryptSecret: value => encryptDesktopSecret(value),
+  decryptSecret: decryptDesktopSecret,
+  userDataDir: app.getPath('userData'),
   rememberLog
 })
 

@@ -1,3 +1,4 @@
+import { arDockerSandboxes } from './ar_docker_sandboxes'
 import { arUpdateChannel } from './ar_update_channel'
 import type { TranslationOverrides } from './define-locale'
 
@@ -12,6 +13,7 @@ export const arSettings = {
     noResults: 'لا توجد لغة مطابقة'
   },
   settings: {
+    dockerSandboxes: arDockerSandboxes,
     subpages: {
       appearanceTheme: 'السمة',
       appearanceTypography: 'الخطوط والتحجيم',

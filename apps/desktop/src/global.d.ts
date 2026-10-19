@@ -257,6 +257,10 @@ declare global {
         discover: (org?: string) => Promise<DesktopCloudDiscoverResult>
         agentSignIn: (dashboardUrl: string) => Promise<DesktopCloudAgentSignInResult>
       }
+      dockerSandboxes?: {
+        provision: (input: DesktopDockerSandboxesProvisionInput) => Promise<DesktopDockerSandboxesProvisionResult>
+        onProgress: (callback: (step: DesktopDockerSandboxesStep) => void) => () => void
+      }
       profile: {
         getDefault: () => Promise<DesktopProfileRoute | null>
         setDefault: (route: DesktopProfileRoute) => Promise<DesktopProfileRoute>
@@ -1386,6 +1390,27 @@ export interface DesktopCloudOrg {
 export type DesktopCloudDiscoverResult =
   | { agents: DesktopCloudAgent[]; org?: DesktopCloudOrg | null; needsOrgSelection?: false }
   | { needsOrgSelection: true; orgs: DesktopCloudOrg[] }
+
+export type DesktopDockerSandboxesStep = 'login' | 'port' | 'ready' | 'sandbox' | 'starting' | 'volume'
+
+export interface DesktopDockerSandboxesProvisionInput {
+  /** Defaults to the provisioner's fixed gateway name. */
+  name?: string
+  username: string
+  personalAccessToken: string
+  image?: string
+}
+
+export interface DesktopDockerSandboxesProvisionResult {
+  ok: boolean
+  connectionId?: string
+  url?: string
+  signedIn?: boolean
+  /** Whether Desktop renews the sandbox and recreates it after expiry. */
+  autoRecreate?: boolean
+  step?: DesktopDockerSandboxesStep
+  error?: string
+}
 
 export interface DesktopCloudAgentSignInResult {
   // The agent gateway base URL the silent sign-in targeted.

@@ -1,0 +1,163 @@
+{
+  "manifest": {
+    "schemaVersion": "2",
+    "kind": "sandbox",
+    "name": "claude",
+    "version": "1.0.0",
+    "displayName": "Claude Code",
+    "description": "Anthropic's Claude Code, with API-key and subscription sign-in both resolved by the sandbox proxy.",
+    "binary": "claude",
+    "template": "docker.io/sbx/claude-image:latest",
+    "aiFilename": "CLAUDE.md",
+    "runOptions": [
+      "--dangerously-skip-permissions"
+    ],
+    "interactiveOptions": [
+      "--dangerously-skip-permissions"
+    ],
+    "volumes": [
+      {
+        "path": "/home/agent/.claude/projects",
+        "size": "2g"
+      },
+      {
+        "path": "/home/agent/.claude/sessions",
+        "size": "512m"
+      },
+      {
+        "path": "/home/agent/.claude/todos",
+        "size": "512m"
+      },
+      {
+        "path": "/home/agent/.claude/shell-snapshots",
+        "size": "512m"
+      },
+      {
+        "path": "/home/agent/.claude/statsig",
+        "size": "512m"
+      }
+    ]
+  },
+  "caps": {
+    "network": {
+      "allow": [
+        "api.anthropic.com",
+        "console.anthropic.com",
+        "claude.ai",
+        "mcp-proxy.anthropic.com",
+        "platform.claude.com",
+        "downloads.claude.ai",
+        "claude.com",
+        "code.claude.com",
+        "bridge.claudeusercontent.com",
+        "archive.ubuntu.com",
+        "security.ubuntu.com",
+        "ports.ubuntu.com",
+        "download.docker.com"
+      ]
+    }
+  },
+  "credentials": [
+    {
+      "service": "anthropic",
+      "apiKey": {
+        "name": "ANTHROPIC_API_KEY",
+        "inject": [
+          {
+            "domain": "api.anthropic.com",
+            "header": "x-api-key",
+            "format": "%s"
+          },
+          {
+            "domain": "console.anthropic.com",
+            "header": "x-api-key",
+            "format": "%s"
+          },
+          {
+            "domain": "claude.ai",
+            "header": "x-api-key",
+            "format": "%s"
+          },
+          {
+            "domain": "mcp-proxy.anthropic.com",
+            "header": "x-api-key",
+            "format": "%s"
+          }
+        ]
+      },
+      "oauth": {
+        "tokenEndpoint": {
+          "host": "platform.claude.com",
+          "path": "/v1/oauth/token"
+        },
+        "sentinels": {
+          "accessToken": "sk-ant-oat01-proxy-managed",
+          "refreshToken": "sk-ant-ort01-proxy-managed"
+        },
+        "credentialFile": {
+          "path": "~/.claude/.credentials.json",
+          "template": "{\"claudeAiOauth\":{\"accessToken\":\"{{.AccessToken}}\",\"refreshToken\":\"{{.RefreshToken}}\",\"expiresAt\":{{.ExpiresAt}},\"scopes\":{{.ScopesJSON}}}{{if .PrimaryApiKey}},\"primaryApiKey\":\"{{.PrimaryApiKey}}\"{{end}}}"
+        },
+        "skipIfEnv": [
+          "ANTHROPIC_API_KEY"
+        ]
+      }
+    }
+  ],
+  "environment": {
+    "variables": {
+      "DISABLE_ERROR_REPORTING": "1",
+      "DISABLE_TELEMETRY": "1",
+      "IS_SANDBOX": "1"
+    }
+  },
+  "commands": {
+    "install": [
+      {
+        "command": "set -e\nws=\"${WORKSPACE_DIR:-/}\"\nesc=$(printf '%s' \"$ws\" | sed 's/\\\\/\\\\\\\\/g; s/\"/\\\\\"/g; s/\\t/\\\\t/g; s/\\r/\\\\r/g')\nprojects=\"\\\"/\\\": { \\\"hasTrustDialogAccepted\\\": true }\"\n[ \"$ws\" = \"/\" ] || projects=\"$projects, \\\"$esc\\\": { \\\"hasTrustDialogAccepted\\\": true }\"\nprintf '%s\\n' \"{\n  \\\"bypassPermissionsModeAccepted\\\": true,\n  \\\"hasCompletedOnboarding\\\": true,\n  \\\"projects\\\": { $projects }\n}\" \u003e /home/agent/.claude.json\nchown agent:agent /home/agent/.claude.json\n",
+        "user": "0",
+        "description": "Seed Claude bypass/trust flags (root; overwrites image-shipped file)"
+      },
+      {
+        "command": "set -e\nmkdir -p /home/agent/.claude\nHELPER=''\nif [ \"${SBX_CRED_ANTHROPIC_MODE:-none}\" != none ]; then\n  HELPER='  \"apiKeyHelper\": \"echo proxy-managed\",\n'\nfi\nprintf '%s' \"{\n  \\\"themeId\\\": 1,\n  \\\"alwaysThinkingEnabled\\\": true,\n${HELPER}  \\\"permissions\\\": { \\\"defaultMode\\\": \\\"bypassPermissions\\\" },\n  \\\"bypassPermissionsModeAccepted\\\": true,\n  \\\"skipDangerousModePermissionPrompt\\\": true\n}\n\" \u003e /home/agent/.claude/settings.json\n",
+        "user": "agent",
+        "description": "Seed Claude settings.json from SBX_CRED_ANTHROPIC_MODE"
+      },
+      {
+        "command": "set -e\n[ -n \"$MCP_GATEWAY_URL\" ] || exit 0\nexport PATH=\"$HOME/.local/bin:$HOME/.claude/local:$PATH\"\nclaude mcp add mcp-gateway \"$MCP_GATEWAY_URL\" \\\n  --transport http \\\n  --scope user \\\n  --header \"Authorization: Bearer $MCP_SENTINEL_TOKEN_NAME\" || true\n",
+        "user": "agent",
+        "description": "Register the sandbox MCP gateway with claude (install-time, race-free)"
+      }
+    ],
+    "startup": [
+      {
+        "command": [
+          "sh",
+          "-c",
+          "chown -R agent:agent /home/agent/.claude/projects /home/agent/.claude/sessions /home/agent/.claude/todos /home/agent/.claude/shell-snapshots /home/agent/.claude/statsig 2\u003e/dev/null || true"
+        ],
+        "user": "0",
+        "description": "Re-own claude session-state volume mount roots to agent (block-volume mkfs trap)"
+      },
+      {
+        "command": [
+          "sh",
+          "-c",
+          "{ command -v apt-get \u0026\u0026 apt-get update -qq -y || true; } \u003e/dev/null 2\u003e\u00261 \u003c/dev/null \u0026"
+        ],
+        "user": "root",
+        "description": "Update apt package cache in background"
+      },
+      {
+        "command": [
+          "sh",
+          "-c",
+          "set -e\n[ -n \"$MCP_GATEWAY_URL\" ] || exit 0\nexport PATH=\"$HOME/.local/bin:$HOME/.claude/local:$PATH\"\nclaude mcp add mcp-gateway \"$MCP_GATEWAY_URL\" \\\n  --transport http \\\n  --scope user \\\n  --header \"Authorization: Bearer $MCP_SENTINEL_TOKEN_NAME\" || true\n"
+        ],
+        "user": "agent",
+        "description": "Register the sandbox MCP gateway with claude (startup fallback)"
+      }
+    ]
+  },
+  "agentContext": "## Claude Code: Environment Persistence\n\nThe `CLAUDE_ENV_FILE` environment variable is set to `/etc/sandbox-persistent.sh`.\n\nAccording to [Claude Code Documentation](https://code.claude.com/docs/en/settings#bash-tool-behavior):\n\n\u003e **CLAUDE_ENV_FILE**\n\u003e\n\u003e If set, this file will be sourced before each Bash command execution. This allows environment variables to persist across multiple Bash tool invocations.\n\nThis means `/etc/sandbox-persistent.sh` is sourced before every Bash tool call you make. Any `export` statements you append to this file will be available in all subsequent commands without needing a login shell.\n\n### Shell Completions Must NOT Be in CLAUDE_ENV_FILE\n\n**NEVER add shell completion scripts to `/etc/sandbox-persistent.sh`.**\n\n`CLAUDE_ENV_FILE` is sourced **before every single bash command execution**, not just during shell initialization. Completion scripts rely on special variables (`COMP_WORDS`, `COMP_CWORD`, `COMPREPLY`) that only exist during tab-completion contexts.\n\n#### WRONG - Will Break Bash\n\n```bash\n# DO NOT ADD THESE TO /etc/sandbox-persistent.sh\n[ -s \"$NVM_DIR/bash_completion\" ] \u0026\u0026 \\. \"$NVM_DIR/bash_completion\"\n[[ -s \"$SDKMAN_DIR/etc/bash_completion.sh\" ]] \u0026\u0026 source \"$SDKMAN_DIR/etc/bash_completion.sh\"\n```\n\n#### CORRECT - Only Load Core Functionality\n\n```bash\n# ONLY add the main initialization scripts\nexport NVM_DIR=\"$HOME/.nvm\"\n[ -s \"$NVM_DIR/nvm.sh\" ] \u0026\u0026 \\. \"$NVM_DIR/nvm.sh\"\n\nexport SDKMAN_DIR=\"$HOME/.sdkman\"\n[[ -s \"$SDKMAN_DIR/bin/sdkman-init.sh\" ]] \u0026\u0026 source \"$SDKMAN_DIR/bin/sdkman-init.sh\"\n```\n\n#### Symptoms of Broken Shell\n\nWhen completion scripts are incorrectly added:\n- All bash commands return no output (silent failure)\n- `echo`, `pwd`, and other basic commands produce no results\n- The bash tool becomes completely unusable\n\n#### Solution\n\nIf you accidentally added completion scripts and broke the shell:\n1. Remove the completion line(s) from `/etc/sandbox-persistent.sh`\n2. Exit and restart the Claude Code session\n3. Verify with `echo \"test\"` that bash works again\n"
+}
