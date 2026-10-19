@@ -5,7 +5,7 @@ Run the whole Hermes agent — gateway, cron, memory, skills, sessions — insid
 Desktop as the UI. Desktop already talks to any `hermes serve` backend over
 HTTP + WebSocket ("Remote gateway" in **Settings → Gateways**); this directory
 provides what makes a sandbox such a backend, plus a Desktop card that creates
-one in a single step:
+one in a single step (to try it, follow [TRY_IT.md](TRY_IT.md)):
 
 | Piece | What it is |
 |---|---|
