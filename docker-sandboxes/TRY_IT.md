@@ -12,11 +12,11 @@ Background and design: [README.md](README.md).
 - A Docker account with **Cloud Sandboxes access, including volumes**.
 - A Docker **personal access token** (PAT) for that account
   (Docker Hub → Account settings → Personal access tokens).
-- An **Anthropic API key stored as a secret in that Docker account** (see step 2).
+- An **Anthropic API key stored as a secret in that Docker account** (step 2).
   OpenAI or OpenRouter secrets also work; Anthropic wins when several exist.
 - macOS or Linux with `git` and Node `^22.22`, `^24.11` or `>=26`.
   Python is provisioned for you by `./activate`.
-- Access to the GitHub repo `docker/sandboxes-api` (only for step 2's script).
+- The [`sbx` CLI](https://docs.docker.com/ai/sandboxes/cloud/) 0.42.0 or later.
 
 ## 1. Get the branch
 
@@ -31,25 +31,18 @@ git checkout docker-sandboxes
 The key never goes into Desktop or the sandbox: the sandbox gets a placeholder,
 and the Docker proxy swaps in the real key on its way to api.anthropic.com.
 Desktop refuses to create a gateway if your account has no
-`anthropic` / `openai` / `openrouter` secret. Skip this step if you already
-have one.
+`anthropic` / `openai` / `openrouter` cloud secret.
+
+With the [`sbx` CLI](https://docs.docker.com/ai/sandboxes/cloud/) (0.42.0 or later):
 
 ```bash
-python3 -m venv /tmp/sbx-secret && /tmp/sbx-secret/bin/pip install -q \
-  "docker-sandboxes-api @ git+https://github.com/docker/sandboxes-api@60d7a5b5f68dd1cec9f804757deeee34abdc49e3#subdirectory=gen/python/sandboxes"
-
-DOCKER_USERNAME=<you> DOCKER_PAT=<pat> ANTHROPIC_API_KEY=sk-ant-... \
-/tmp/sbx-secret/bin/python - <<'EOF'
-import os
-from docker_sandboxes_api import SyncSandboxesClient, PATAuth
-from docker_sandboxes_api.models import TokenSecretMaterial
-c = SyncSandboxesClient(auth=PATAuth(username=os.environ["DOCKER_USERNAME"],
-                                     personal_access_token=os.environ["DOCKER_PAT"]))
-s = c.secrets.create(display_name="anthropic", service_type="anthropic",
-                     token=TokenSecretMaterial(value=os.environ["ANTHROPIC_API_KEY"]))
-print("stored", s.resource.name)
-EOF
+sbx login                              # same Docker account as in Desktop
+sbx --cloud diagnose                   # checks Cloud access for the account
+sbx --cloud secret set anthropic       # prompts for the key
 ```
+
+`--cloud` matters: secrets stored for local sandboxes are not visible to cloud
+sandboxes. For OpenAI or OpenRouter, use `openai` or `openrouter` as the service.
 
 ## 3. Run Hermes Desktop from the branch
 
@@ -103,7 +96,7 @@ signed in. Chat as usual: the model calls, tools and files all run in the sandbo
 With the [`sbx` CLI](https://docs.docker.com/ai/sandboxes/):
 
 ```bash
-sbx exec -it <sandbox-id> --cloud /bin/bash     # id: the "sandbox" field in Desktop's docker-sandboxes.json
+sbx --cloud exec -it <sandbox-id> /bin/bash     # id: the "sandbox" field in Desktop's docker-sandboxes.json
 tail -f ~/.hermes/logs/*.log                    # backend + gateway-run.log (cron)
 hermes cron status                              # should say a gateway serves profile 'default'
 ```
