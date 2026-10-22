@@ -8,7 +8,7 @@ export const zhHantDockerSandboxes: DockerSandboxesTranslations = {
   usernameTitle: 'Docker Hub 使用者名稱',
   usernameDesc: '擁有 Cloud Sandboxes 存取權的 Docker 帳戶。',
   patTitle: '個人存取權杖',
-  patDesc: '儲存在鑰匙圈中，讓 Desktop 能在沙盒過期前重新建立它。',
+  patDesc: '儲存在鑰匙圈中，讓 Desktop 能喚醒沙盒，並在沙盒遺失時重建它。',
   provision: '建立閘道',
   provisioning: '建立中…',
   steps: {
@@ -22,7 +22,8 @@ export const zhHantDockerSandboxes: DockerSandboxesTranslations = {
   done: 'Docker Sandbox 閘道已就緒並已登入。',
   doneSignInNeeded: 'Docker Sandbox 閘道已就緒。請在它所在列點選登入，並使用下方的登入資訊。',
   lifetimeNote:
-    '雲端沙盒最長存在 24 小時。Desktop 會在過期前於同一磁碟區上重新建立它，閘道會保留記憶、技能與工作階段。',
+    '沙盒每天休眠一次並自動恢復，位址、記憶、技能與工作階段保持不變。若沙盒遺失，Desktop 會在同一磁碟區上重建它。',
+  addKey: '接著，在「設定 → 提供者」中新增模型金鑰。它會以密鑰形式儲存在你的 Docker 帳戶中，沙盒永遠看不到它。',
   notKeptAlive: '此閘道不會自動重新建立：Hermes 無法安全地儲存你的權杖。',
   failed: step => `無法建立閘道（${step}）。`,
   unavailable: '此版本的 Hermes Desktop 無法建立雲端沙盒。'

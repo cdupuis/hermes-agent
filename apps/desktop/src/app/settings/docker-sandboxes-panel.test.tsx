@@ -96,6 +96,7 @@ describe('Docker Cloud Sandboxes panel', () => {
     await waitFor(() => expect(selectConnection).toHaveBeenCalledWith('docker-sandbox'))
     expect(refreshConnectionsRegistry).toHaveBeenCalled()
     expect(screen.queryByText(d.notKeptAlive)).toBeNull()
+    expect(screen.queryByText(d.addKey)).toBeNull()
     expect(container.innerHTML).not.toContain('dckr_pat_secret')
   })
 
@@ -105,6 +106,14 @@ describe('Docker Cloud Sandboxes panel', () => {
     fillForm()
     await act(async () => fireEvent.click(screen.getByRole('button', { name: d.provision })))
     expect(screen.getByText(d.notKeptAlive)).toBeTruthy()
+  })
+
+  it('points to Settings → Providers when the gateway has no model key yet', async () => {
+    provision.mockResolvedValue({ ok: true, connectionId: 'docker-sandbox', signedIn: true, needsKey: true })
+    render(<DockerSandboxesPanel />)
+    fillForm()
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: d.provision })))
+    expect(screen.getByText(d.addKey)).toBeTruthy()
   })
 
   it('reports a failed provision and stays put', async () => {

@@ -8,7 +8,8 @@ export const frDockerSandboxes: DockerSandboxesTranslations = {
   usernameTitle: 'Nom d’utilisateur Docker Hub',
   usernameDesc: 'Le compte Docker disposant de l’accès à Cloud Sandboxes.',
   patTitle: 'Jeton d’accès personnel',
-  patDesc: 'Conservé dans votre trousseau pour que Desktop puisse recréer la sandbox avant son expiration.',
+  patDesc:
+    'Conservé dans votre trousseau pour que Desktop puisse réveiller la sandbox et la reconstruire si elle disparaît.',
   provision: 'Créer la passerelle',
   provisioning: 'Création…',
   steps: {
@@ -23,7 +24,9 @@ export const frDockerSandboxes: DockerSandboxesTranslations = {
   doneSignInNeeded:
     'Votre passerelle Docker Sandbox est prête. Utilisez Se connecter sur sa ligne avec l’identifiant ci-dessous.',
   lifetimeNote:
-    'Les sandboxes cloud durent au plus 24 heures. Desktop recrée celle-ci sur le même volume avant son expiration ; la passerelle garde sa mémoire, ses compétences et ses sessions.',
+    'La sandbox hiberne une fois par jour et reprend d’elle-même, avec la même adresse, la même mémoire, les mêmes compétences et sessions. Si elle disparaît, Desktop la reconstruit sur le même volume.',
+  addKey:
+    'Ajoutez ensuite une clé de modèle dans Réglages → Fournisseurs. Elle est stockée comme secret dans votre compte Docker ; la sandbox ne la voit jamais.',
   notKeptAlive:
     'Cette passerelle ne sera pas recréée automatiquement : Hermes n’a pas pu stocker votre jeton de façon sécurisée.',
   failed: step => `Impossible de créer la passerelle (${step}).`,

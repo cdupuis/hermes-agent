@@ -8,7 +8,7 @@ export const esDockerSandboxes: DockerSandboxesTranslations = {
   usernameTitle: 'Usuario de Docker Hub',
   usernameDesc: 'La cuenta de Docker con acceso a Cloud Sandboxes.',
   patTitle: 'Token de acceso personal',
-  patDesc: 'Se guarda en tu llavero para que Desktop pueda volver a crear la sandbox antes de que caduque.',
+  patDesc: 'Se guarda en tu llavero para que Desktop pueda despertar la sandbox y reconstruirla si se pierde.',
   provision: 'Crear pasarela',
   provisioning: 'Creando…',
   steps: {
@@ -22,7 +22,9 @@ export const esDockerSandboxes: DockerSandboxesTranslations = {
   done: 'Tu pasarela Docker Sandbox está lista y con sesión iniciada.',
   doneSignInNeeded: 'Tu pasarela Docker Sandbox está lista. Usa Iniciar sesión en su fila con el acceso de abajo.',
   lifetimeNote:
-    'Las sandboxes en la nube duran como máximo 24 horas. Desktop vuelve a crear esta en el mismo volumen antes de que caduque; la pasarela conserva su memoria, habilidades y sesiones.',
+    'La sandbox hiberna una vez al día y se reanuda sola, con la misma dirección, memoria, habilidades y sesiones. Si alguna vez se pierde, Desktop la reconstruye en el mismo volumen.',
+  addKey:
+    'A continuación, añade una clave de modelo en Ajustes → Proveedores. Se guarda como secreto en tu cuenta de Docker; la sandbox nunca la ve.',
   notKeptAlive: 'Esta pasarela no se recreará automáticamente: Hermes no pudo guardar tu token de forma segura.',
   failed: step => `No se pudo crear la pasarela (${step}).`,
   unavailable: 'Esta versión de Hermes Desktop no puede crear sandboxes en la nube.'

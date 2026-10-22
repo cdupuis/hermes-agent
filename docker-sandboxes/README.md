@@ -11,7 +11,7 @@ one in a single step (to try it, follow [TRY_IT.md](TRY_IT.md)):
 |---|---|
 | [`kit/`](kit/) | A v2 sandbox kit: image build (`Dockerfile`), the `spec.yaml` the Sandboxes API applies at create, and the scripts that boot `hermes serve` with the proxy-managed provider credential and a generated dashboard login. |
 | [`provisioner/`](provisioner/) | `hermes-sbx`, a small Python CLI on the [`docker-sandboxes-api`](https://github.com/docker/sandboxes-api) SDK: stores the Anthropic key as a sandbox secret, creates a persistent volume for `HERMES_HOME`, creates the sandbox from the kit, publishes port 9119, reads the generated login back out, and prints what to paste into Desktop. |
-| Desktop card | **Settings → Gateways → Docker Cloud Sandboxes** (`apps/desktop/electron/docker-sandboxes-*.ts`, `src/app/settings/docker-sandboxes-card.tsx`): asks for a gateway name, a Docker username and a PAT, runs the same flow as `hermes-sbx` on the [`@docker/sandboxes`](https://www.npmjs.com/package/@docker/sandboxes) SDK, and saves the result as an ordinary Remote gateway that is already signed in. The PAT is used for that call only. |
+| Desktop card | **Settings → Gateways → Docker Cloud Sandboxes** (`apps/desktop/electron/docker-sandboxes-*.ts`, `src/app/settings/docker-sandboxes-panel.tsx`): asks for a Docker username and a PAT, runs the same flow as `hermes-sbx` on the [`@docker/sandboxes`](https://www.npmjs.com/package/@docker/sandboxes) SDK, and saves the result as an ordinary Remote gateway that is already signed in. The PAT is kept (keychain-encrypted) so Desktop can wake the sandbox, rebuild a lost one and store the gateway's model keys as Docker secrets. |
 | [`tools/`](tools/) | `kitpack-go`, the reference packer from `docker/sbx-kits-contrib`, used to generate the goldens that pin the Python packer. |
 
 ## How the pieces fit
@@ -31,15 +31,22 @@ Hermes Desktop ──HTTPS/WSS──▶ published port 9119 ──▶ hermes ser
   `HERMES_HOME`) so the mount cannot shadow them; first boot links
   `<volume>/installs` to that environment so the `hermes` launcher finds it.
 - **The model key never enters the sandbox.** The kit declares `anthropic`,
-  `openai` and `openrouter` credentials, and the provisioner ATTACHES the
-  account's stored secrets for those services at create (`storage.secrets`).
-  Both are needed: an unattached secret is never injected, the container's
-  `ANTHROPIC_API_KEY` stays the `proxy-managed` sentinel, and every model call
-  answers 401. Attached, the proxy swaps the sentinel for the key on egress and
-  Cloud sets `SBX_CRED_<SERVICE>_MODE`, which the kit's credential script reads
-  to keep the sentinel. An account without any of those secrets is refused
-  before anything is created. `hermes-sbx up --store-key-env ANTHROPIC_API_KEY`
-  stores a key as a `service_type: anthropic` secret and attaches that instead.
+  `openai` and `openrouter` credentials, and the provisioner ATTACHES stored
+  secrets for those services at create (`storage.secrets`). Both are needed: an
+  unattached secret is never injected, the container's `ANTHROPIC_API_KEY`
+  stays the `proxy-managed` sentinel, and every model call answers 401.
+  Attached, the proxy swaps the sentinel for the key on egress and Cloud sets
+  `SBX_CRED_<SERVICE>_MODE`, which the kit's credential script reads to keep the
+  sentinel. Only secrets created through the API attach: one stored by `sbx`
+  is refused ("stored secret must be enrolled with an immutable resource
+  identity", since 2026-10-22). So Desktop stores the key itself: a save in
+  **Settings → Providers** for a Docker Sandbox gateway becomes the secret
+  `hermes-desktop:<service>` in the Docker account instead of a line in the
+  gateway's `.env` (`docker-sandboxes-provider-keys.ts`). A changed key is
+  updated in place; the first key for a provider rebuilds the sandbox on the
+  same volume, because Cloud attaches secrets only at create. `hermes-sbx`
+  attaches those same secrets, or one it stores with
+  `--store-key-env ANTHROPIC_API_KEY`.
 - **The published URL is public HTTPS**, so the backend's own auth gate is on:
   a non-loopback bind in Hermes always requires an auth provider. Every
   provisioning request sets a fresh, non-secret `HSBX_LOGIN_NONCE` in the
@@ -49,11 +56,13 @@ Hermes Desktop ──HTTPS/WSS──▶ published port 9119 ──▶ hermes ser
   `HERMES_HOME/.sbx/desktop-login.json`. The provisioner reads and deletes that
   file. This works the same on a fresh volume and on one an earlier sandbox set
   up; restarts of the same sandbox rotate nothing.
-- **The backend starts from a startup hook, not the entrypoint.** A v2 kit's
-  entrypoint only runs when something attaches (`sbx run`); nothing attaches in
-  Cloud, so `setup.startup` launches `hermes serve` in the background.
-- **Cron keeps ticking** while the sandbox runs (`hermes serve` hosts the
-  scheduler). A stopped sandbox misses schedules — see *Limits*.
+- **The backend is the kit's entrypoint**, which Cloud runs at create; a
+  `setup.startup` hook runs the gateway that owns cron beside it.
+- **The sandbox hibernates in place.** The volume is attached `exclusive`, which
+  lets Cloud snapshot the whole sandbox. Each cycle lasts the 24h maximum; with
+  `onTimeout: restart` Cloud then hibernates and resumes it (processes, memory,
+  URL and login intact). Accounts without the AlwaysOn and Hibernate
+  entitlements get `stop` + auto-resume: asleep until woken.
 
 ## Build and publish the image
 
@@ -75,8 +84,8 @@ pip install -e .   # pulls the SDK from github.com/docker/sandboxes-api (not on 
 export DOCKER_USERNAME=<you> DOCKER_PAT=<docker-personal-access-token>   # or DOCKER_ACCESS_TOKEN
 
 hermes-sbx up --name my-hermes --image ghcr.io/<you>/hermes-serve-image:latest
-# attaches the account's stored anthropic/openai/openrouter secrets; an account
-# without one: add --store-key-env ANTHROPIC_API_KEY
+# attaches the hermes-desktop:<service> secrets Desktop stored; without them,
+# add --store-key-env ANTHROPIC_API_KEY (secrets stored by `sbx` cannot be attached)
 ```
 
 Prints, at the end:
@@ -106,25 +115,28 @@ scripts carry over.
 
 Verified against Cloud (2026-10): sign-in, the `/api/ws` WebSocket upgrade
 through the port proxy, credential injection with the secret attached (the
-sentinel reaches api.anthropic.com as the real key: 200; unattached: 401), and
-volume persistence across sandbox deletion.
+sentinel reaches api.anthropic.com as the real key: 200; unattached: 401),
+volume persistence across sandbox deletion, and (2026-10-22) hibernate and
+resume with the volume attached: stop in about 60 s, start in about 14 s, the
+same boot, processes, temp files, volume and published URL afterwards; while
+asleep the URL answers `409 sandbox is hibernated`.
 
-- **24 hours, then delete.** Cloud caps the create-time lifetime at 24h, and
-  with a volume attached it refuses every expiry action but `delete`
-  (`stop` cannot hibernate a volume-backed sandbox; `keep`/`restart` "cannot be
-  faithfully resumed yet"). Nothing is lost: the state is on the volume.
-  `hermes-sbx renew` extends the lifetime; `hermes-sbx up` (or the Desktop card
-  with the same gateway name) recreates the sandbox on the existing volume.
-  Volume display names are unique per account, which is what makes the same
-  name find the same volume. A recreated sandbox gets a new URL, so Desktop
-  saves it as a new gateway entry.
+- **A daily hibernate.** A cycle lasts at most 24h ("timeout duration is
+  outside the supported range" beyond it). With `restart` the sandbox resumes
+  by itself; how long the gateway is unreachable during that daily cycle was not
+  measured. With `stop` it sleeps until Desktop's keeper (at launch, then every
+  30 min) or `hermes-sbx up` resumes it. A sandbox that is really gone is
+  rebuilt on the same volume (display names are unique per account, so the
+  same name finds it); that one gets a new URL, and Desktop re-points the
+  gateway entry. Removing the gateway in Desktop deletes its sandbox, which
+  would otherwise never expire.
 - **Cron runs in the sandbox, not in Desktop.** `hermes serve` only ticks cron
   when Desktop owns the process, so the kit runs a supervised `hermes gateway
   run` beside it (a startup hook; a hand-run gateway never idle-exits), and
   `hermes cron status` reports "the host gateway … serving profiles default".
   Without it jobs fired only while a client happened to start a gateway.
-- **No scale to zero.** A volume-backed sandbox cannot be stopped, so cron
-  runs whenever the sandbox exists and never while it does not. A
+- **Cron sleeps with the sandbox.** Jobs due while it is hibernated are
+  missed: briefly once a day with `restart`, until woken with `stop`. A
   `CronScheduler` provider that arms wake-ups externally is the follow-up if
   sleeping sandboxes matter.
 - **Volume access must be enabled** for the Docker account; memory-snapshot
@@ -142,5 +154,6 @@ cd docker-sandboxes/provisioner && pip install -e . pytest && pytest
 cd docker-sandboxes/tools && ./regenerate-goldens.sh   # after editing kit/spec.yaml
 # then copy provisioner/tests/golden/hermes-serve.json into
 # apps/desktop/electron/docker-sandboxes-kit.ts (a test fails until you do)
-cd apps/desktop && npx vitest run electron/docker-sandboxes-provision.test.ts src/app/settings/docker-sandboxes-card.test.tsx
+cd apps/desktop && npx vitest run --project electron electron/docker-sandboxes
+cd apps/desktop && npx vitest run --project ui src/app/settings/docker-sandboxes-panel.test.tsx
 ```

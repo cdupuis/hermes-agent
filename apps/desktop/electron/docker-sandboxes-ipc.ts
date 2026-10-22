@@ -4,6 +4,7 @@ import path from 'node:path'
 import { app, ipcMain, type Session, type WebContents } from 'electron'
 
 import { createKeeper, type KeeperRecord, type KeeperStore } from './docker-sandboxes-keeper'
+import { createProviderKeyRouter } from './docker-sandboxes-provider-keys'
 import {
   type ProvisionDeps,
   ProvisionError,
@@ -23,9 +24,10 @@ import { createSandboxesApi } from './docker-sandboxes-sdk'
  * login is POSTed through that connection's own cookie partition, the jar its
  * sockets read, so the gateway is usable without a login window. The password
  * never leaves the main process. The Docker PAT and that password are kept,
- * through Desktop's secret envelope, only so the keeper can recreate the
- * sandbox before it expires and sign the gateway in again when its session
- * lapses (docker-sandboxes-keeper.ts); when the envelope refuses
+ * through Desktop's secret envelope, only so the keeper can wake a hibernated
+ * sandbox, rebuild a lost one, store the gateway's model keys as Docker
+ * secrets, and sign the gateway in again when its session lapses
+ * (docker-sandboxes-keeper.ts); when the envelope refuses
  * (keychain unavailable and no plain-text opt-in) nothing is stored and the
  * gateway simply is not kept alive.
  */
@@ -57,8 +59,10 @@ export interface DockerSandboxesProvisionResponse {
   connectionId?: string
   url?: string
   signedIn?: boolean
-  /** Whether Desktop will renew the sandbox and recreate it after expiry. */
+  /** Whether Desktop keeps the sandbox alive: wakes it, rebuilds it if lost. */
   autoRecreate?: boolean
+  /** No model key is attached yet; one is added in Settings → Providers. */
+  needsKey?: boolean
   step?: ProvisionStep
   error?: string
 }
@@ -149,7 +153,7 @@ function fileStore(file: string): KeeperStore {
   }
 }
 
-export function registerDockerSandboxesIpc(deps: DockerSandboxesIpcDeps): void {
+export function registerDockerSandboxesIpc(deps: DockerSandboxesIpcDeps) {
   const store = fileStore(path.join(deps.userDataDir, 'docker-sandboxes.json'))
 
   const keeper = createKeeper({
@@ -163,7 +167,12 @@ export function registerDockerSandboxesIpc(deps: DockerSandboxesIpcDeps): void {
     hasSession: (connectionId, url) => deps.hasSessionCookie(url, connectionId),
     signIn: (connectionId, url, username, password) =>
       signIn(deps, connectionId, url, username, password).catch(() => false),
-    now: Date.now,
+    rememberLog: deps.rememberLog
+  })
+
+  const providerKeys = createProviderKeyRouter({
+    setProviderKey: keeper.setProviderKey,
+    providerKeyServices: keeper.providerKeyServices,
     rememberLog: deps.rememberLog
   })
 
@@ -193,11 +202,20 @@ export function registerDockerSandboxesIpc(deps: DockerSandboxesIpcDeps): void {
           }
 
           const result = await provisionHermesSandbox(input, { api, httpStatus, onStep })
-          deps.rememberLog(`[docker-sandboxes] provisioned ${result.sandbox} on ${result.volume} at ${result.url}`)
+          deps.rememberLog(
+            `[docker-sandboxes] provisioned ${result.sandbox} on ${result.volume} at ${result.url} (on timeout: ${result.onTimeout})`
+          )
           const gateway = await registerGateway(deps, input.name, result)
           const autoRecreate = rememberForKeeper(deps, keeper, input, gateway.id, result)
 
-          return { ok: true, connectionId: gateway.id, url: result.url, signedIn: gateway.signedIn, autoRecreate }
+          return {
+            ok: true,
+            connectionId: gateway.id,
+            url: result.url,
+            signedIn: gateway.signedIn,
+            autoRecreate,
+            needsKey: result.credentials.length === 0
+          }
         } finally {
           await close().catch(() => undefined)
         }
@@ -209,6 +227,9 @@ export function registerDockerSandboxesIpc(deps: DockerSandboxesIpcDeps): void {
       }
     }
   )
+
+  /** `hermes:api` hands every request here first; model-key writes for a sandbox gateway go to Cloud. */
+  return { routeApiRequest: providerKeys.route }
 }
 
 function rememberForKeeper(

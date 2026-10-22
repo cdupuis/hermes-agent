@@ -70,6 +70,10 @@ class TimeoutAction(_Enum):
     pass
 
 
+class AttachmentMode(_Enum):
+    pass
+
+
 class NotFoundError(Exception):
     pass
 
@@ -81,7 +85,8 @@ class RateLimitError(Exception):
 STUB_SDK = SimpleNamespace(
     models=SimpleNamespace(TokenSecretMaterial=TokenSecretMaterial, VolumeAttachment=VolumeAttachment,
                            KitInput=KitInput, KitArtifactInput=KitArtifactInput, KitRef=KitRef,
-                           KitRefKind=KitRefKind, TimeoutAction=TimeoutAction, Resources=Resources),
+                           KitRefKind=KitRefKind, TimeoutAction=TimeoutAction, Resources=Resources,
+                           AttachmentMode=AttachmentMode),
     client=SimpleNamespace(CallOptions=CallOptions, WaitOptions=WaitOptions, NotFoundError=NotFoundError,
                            RateLimitError=RateLimitError),
 )
@@ -176,7 +181,8 @@ def test_create_sandbox_sends_the_inline_artifact_the_way_kits_launch_does():
         "resources": Resources(cpus=2, memory_mib=4096),
         "kits": [KitInput(artifact=KitArtifactInput(ref=KitRef(ref="hermes-serve", kind=KitRefKind("sandbox")),
                                                      inline=b'{"manifest":{}}'))],
-        "storage": {"volumes": [VolumeAttachment(volume="volumes/v", target="/home/agent/.hermes")],
+        "storage": {"volumes": [VolumeAttachment(volume="volumes/v", target="/home/agent/.hermes",
+                                                  mode=AttachmentMode("exclusive"))],
                     "secrets": ["secrets/s"]},
         "environment": {"X": "1"},
         "lifecycle": {"timeout": timedelta(days=1), "on_timeout": TimeoutAction("delete")},

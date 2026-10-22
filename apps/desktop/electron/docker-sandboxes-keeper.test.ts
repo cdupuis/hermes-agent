@@ -2,10 +2,13 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { createKeeper, type KeeperDeps, type KeeperRecord, RECREATE_MARGIN_MS } from './docker-sandboxes-keeper'
-import type { ProvisionResult, SandboxesApi } from './docker-sandboxes-provision'
-
-const NOW = 1_800_000_000_000
+import { createKeeper, type KeeperDeps, type KeeperRecord } from './docker-sandboxes-keeper'
+import {
+  ownedSecretName,
+  type ProvisionResult,
+  type SandboxesApi,
+  type StoredSecret
+} from './docker-sandboxes-provision'
 
 const RECORD: KeeperRecord = {
   connectionId: 'docker-sandbox',
@@ -25,14 +28,15 @@ const RECREATED: ProvisionResult = {
   password: 'new-pw',
   sandbox: 'sandboxes/new',
   volume: 'volumes/v1',
-  credentials: ['anthropic']
+  credentials: ['anthropic'],
+  onTimeout: 'restart'
 }
 
 function harness(
-  { status = 'running', expiresAt = NOW + 12 * 3_600_000, session = true } = {} as {
+  { status = 'running', session = true, secrets = [] } = {} as {
     status?: null | string
-    expiresAt?: null | number
     session?: boolean
+    secrets?: StoredSecret[]
   },
   overrides: Partial<KeeperDeps> = {}
 ) {
@@ -41,8 +45,12 @@ function harness(
 
   const api = {
     sandboxStatus: async (name: string) => (calls.push(['sandboxStatus', name]), status),
-    sandboxExpiresAt: async () => expiresAt,
-    deleteSandbox: async (name: string) => void calls.push(['deleteSandbox', name])
+    deleteSandbox: async (name: string) => void calls.push(['deleteSandbox', name]),
+    startSandbox: async (name: string) => void calls.push(['startSandbox', name]),
+    listSecrets: async () => secrets,
+    createSecret: async (...args: unknown[]) => (calls.push(['createSecret', ...args]), 'secrets/new'),
+    updateSecret: async (...args: unknown[]) => void calls.push(['updateSecret', ...args]),
+    deleteSecret: async (...args: unknown[]) => void calls.push(['deleteSecret', ...args])
   } as unknown as SandboxesApi
 
   const deps: KeeperDeps = {
@@ -55,7 +63,6 @@ function harness(
     repoint: async (id, label, result) => (calls.push(['repoint', id, label, result.url]), true),
     hasSession: async () => session,
     signIn: async (...args) => (calls.push(['signIn', ...args]), true),
-    now: () => NOW,
     rememberLog: () => undefined,
     ...overrides
   }
@@ -102,19 +109,17 @@ test('keeper: an expired sandbox is recreated under the same name and the gatewa
   assert.ok(!h.names().includes('deleteSandbox'))
 })
 
-test('keeper: a sandbox about to expire is replaced early, deleting the old one first', async () => {
-  const h = harness({ expiresAt: NOW + RECREATE_MARGIN_MS - 60_000 })
+test('keeper: a hibernated sandbox is resumed in place, never replaced', async () => {
+  const h = harness({ status: 'stopped' })
 
-  assert.deepEqual(await createKeeper(h.deps).check(), { 'docker-sandbox': 'recreated' })
-  // The old sandbox still holds the volume (attachment is exclusive).
-  assert.ok(h.names().indexOf('deleteSandbox') < h.names().indexOf('provision'))
-})
-
-test('keeper: a sandbox with plenty of time left is not replaced', async () => {
-  const h = harness({ expiresAt: NOW + RECREATE_MARGIN_MS + 60_000 })
-
-  await createKeeper(h.deps).check()
-  assert.ok(!h.names().includes('provision'))
+  assert.deepEqual(await createKeeper(h.deps).check(), { 'docker-sandbox': 'resumed' })
+  assert.deepEqual(
+    h.calls.find(c => c[0] === 'startSandbox'),
+    ['startSandbox', 'sandboxes/old']
+  )
+  // Same sandbox, same URL: nothing to re-point, and the memory snapshot keeps its processes.
+  assert.ok(!h.names().includes('provision') && !h.names().includes('deleteSandbox'))
+  assert.deepEqual(h.records(), [RECORD])
 })
 
 test('keeper: a failed sandbox is deleted, then recreated', async () => {
@@ -124,12 +129,17 @@ test('keeper: a failed sandbox is deleted, then recreated', async () => {
   assert.ok(h.names().indexOf('deleteSandbox') < h.names().indexOf('provision'))
 })
 
-test('keeper: a gateway the user removed is forgotten, not recreated', async () => {
-  const h = harness({ status: null }, { connectionExists: () => false })
+test('keeper: a gateway the user removed is forgotten and its sandbox deleted, not recreated', async () => {
+  const h = harness({}, { connectionExists: () => false })
 
   assert.deepEqual(await createKeeper(h.deps).check(), { 'docker-sandbox': 'forgotten' })
   assert.deepEqual(h.records(), [])
-  assert.ok(!h.names().includes('openApi'))
+  // A hibernating sandbox never expires: left alone it would run and bill forever.
+  assert.deepEqual(
+    h.calls.find(c => c[0] === 'deleteSandbox'),
+    ['deleteSandbox', 'sandboxes/old']
+  )
+  assert.ok(!h.names().includes('provision'))
 })
 
 test('keeper: a Cloud failure keeps the record for the next pass', async () => {
@@ -156,4 +166,71 @@ test('keeper: remember replaces the record for the same gateway', () => {
     h.records().map(r => r.sandbox),
     ['sandboxes/fresh']
   )
+})
+
+const ANTHROPIC = { name: 'secrets/a', displayName: ownedSecretName('anthropic'), serviceType: 'anthropic' }
+
+test('provider keys: a gateway this keeper does not manage falls through', async () => {
+  const h = harness()
+
+  assert.equal(await createKeeper(h.deps).setProviderKey('other', 'anthropic', 'sk-ant-1'), false)
+  assert.ok(!h.names().includes('openApi'))
+})
+
+test('provider keys: changing a stored key updates the secret in place, without a rebuild', async () => {
+  const h = harness({ secrets: [ANTHROPIC] })
+
+  assert.equal(await createKeeper(h.deps).setProviderKey('docker-sandbox', 'anthropic', 'sk-ant-2'), true)
+  assert.deepEqual(
+    h.calls.find(c => c[0] === 'updateSecret'),
+    ['updateSecret', 'secrets/a', 'anthropic', 'sk-ant-2']
+  )
+  assert.ok(!h.names().includes('provision') && !h.names().includes('deleteSandbox'))
+})
+
+test('provider keys: a first key is stored, then the sandbox is rebuilt so Cloud attaches it', async () => {
+  // A secret `sbx` stored under another name is not Desktop's: Cloud would refuse to attach it.
+  const h = harness({
+    secrets: [{ name: 'secrets/sbx', displayName: 'docker-sbx:anthropic', serviceType: 'anthropic' }]
+  })
+
+  await createKeeper(h.deps).setProviderKey('docker-sandbox', 'anthropic', 'sk-ant-1')
+
+  assert.deepEqual(
+    h.calls.find(c => c[0] === 'createSecret'),
+    ['createSecret', ownedSecretName('anthropic'), 'anthropic', 'sk-ant-1']
+  )
+  const order = h.names()
+  assert.ok(order.indexOf('createSecret') < order.indexOf('deleteSandbox'))
+  assert.ok(order.indexOf('deleteSandbox') < order.indexOf('provision'))
+  assert.equal(h.records()[0].url, 'https://9119-new.example')
+})
+
+test('provider keys: removing a key detaches it by rebuilding, then deletes the secret', async () => {
+  const h = harness({ secrets: [ANTHROPIC] })
+
+  await createKeeper(h.deps).setProviderKey('docker-sandbox', 'anthropic', null)
+
+  const order = h.names()
+  // The running sandbox holds the secret until it is gone.
+  assert.ok(order.indexOf('deleteSandbox') < order.indexOf('deleteSecret'))
+  assert.ok(order.indexOf('deleteSecret') < order.indexOf('provision'))
+})
+
+test('provider keys: the stored services are the ones Desktop owns', async () => {
+  const h = harness({
+    secrets: [ANTHROPIC, { name: 'secrets/sbx', displayName: 'docker-sbx:openai', serviceType: 'openai' }]
+  })
+
+  const keeper = createKeeper(h.deps)
+
+  assert.deepEqual(await keeper.providerKeyServices('docker-sandbox'), ['anthropic'])
+  assert.equal(await keeper.providerKeyServices('other'), null)
+})
+
+test('keeper: an unreadable Docker token keeps the record while the gateway exists', async () => {
+  const h = harness({}, { decrypt: () => '' })
+
+  assert.deepEqual(await createKeeper(h.deps).check(), { 'docker-sandbox': 'skipped' })
+  assert.deepEqual(h.records(), [RECORD])
 })

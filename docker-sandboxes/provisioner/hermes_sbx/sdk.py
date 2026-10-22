@@ -88,9 +88,10 @@ class Backend:
             token=self._sdk.models.TokenSecretMaterial(value=token), options=self._options(request_id))
         return str(secret.resource.name)
 
-    def list_secrets(self) -> list[tuple[str, str]]:
-        """(name, service_type) of every stored secret in the account."""
-        return [(str(s.name), str(s.service_type)) for s in self._client.secrets.all().collect()]
+    def list_secrets(self) -> list[tuple[str, str, str]]:
+        """(name, service_type, display_name) of every stored secret in the account."""
+        return [(str(s.name), str(s.service_type), str(s.display_name or ""))
+                for s in self._client.secrets.all().collect()]
 
     def create_volume(self, *, display_name: str, request_id: str) -> str:
         volume = self._client.volumes.create(display_name=display_name, options=self._options(request_id))
@@ -105,7 +106,9 @@ class Backend:
         ``image``/``image_ref`` is sent."""
         storage: dict[str, Any] = {}
         if volume:
-            storage["volumes"] = [self._sdk.models.VolumeAttachment(volume=volume, target=volume_target)]
+            # Exclusive is what lets a volume-backed sandbox hibernate (seen live, 2026-10-22).
+            storage["volumes"] = [self._sdk.models.VolumeAttachment(
+                volume=volume, target=volume_target, mode=self._sdk.models.AttachmentMode("exclusive"))]
         if secrets:
             storage["secrets"] = list(secrets)
         kwargs: dict[str, Any] = {
@@ -143,6 +146,10 @@ class Backend:
 
     def status(self, name: str) -> str:
         return str(self._client.get(name).resource.core.status)
+
+    def start(self, name: str, *, timeout: float) -> None:
+        """Resume a hibernated sandbox (a fresh handle: an older one's etag fails after any change)."""
+        self._client.get(name).start(options=self._options(timeout=timeout))
 
     def publish_port(self, name: str, *, number: int, request_id: str) -> str:
         sandbox = self._client.get(name)
@@ -184,24 +191,28 @@ class Backend:
         self._client.secrets.get(name).delete()
 
 
-TIMEOUT_ACTIONS = ("stop", "keep", "restart", "delete")
-# Cloud refuses a longer create-time timeout ("timeout must not exceed 86400 seconds").
+TIMEOUT_ACTIONS = ("restart", "stop", "keep", "delete")
+# Cloud refuses a longer cycle ("timeout duration is outside the supported range").
 MAX_LIFETIME = timedelta(hours=24)
 # The first create from a new image waits on a ~1.5 GB pull; 180s timed out live.
 CREATE_TIMEOUT_SECONDS = 600.0
 
 
-def lifecycle(*, lifetime: timedelta, on_timeout: str = "delete") -> dict[str, Any]:
+def lifecycle(*, lifetime: timedelta, on_timeout: str = "restart") -> dict[str, Any]:
     """Create-time lifecycle options (``features.timeouts`` on the wire).
 
-    With a volume attached, Cloud allows only ``delete`` at expiry: it refuses to
-    hibernate a volume-backed sandbox ("cannot be hibernated") and refuses
-    ``keep``/``restart`` ("cannot be faithfully resumed yet"), both seen live.
-    Deleting is safe for this backend because all state is on the volume, which
-    outlives the sandbox; ``hermes-sbx renew`` extends the lifetime and
-    ``hermes-sbx up`` recreates an expired sandbox on the same volume."""
+    With the volume attached exclusively the sandbox hibernates in place (seen
+    live, 2026-10-22): ``restart`` hibernates and resumes it at the end of each
+    cycle, keeping processes, memory and the published URL; it needs the
+    AlwaysOn and Hibernate entitlements. ``stop`` hibernates and stays asleep;
+    it is paired with auto-resume so a request can wake it (``hermes-sbx up``
+    also resumes it). ``delete`` still works: the volume outlives the sandbox
+    and ``up`` recreates it there."""
     if on_timeout not in TIMEOUT_ACTIONS:
         raise ValueError(f"on_timeout must be one of {TIMEOUT_ACTIONS}")
     if not timedelta(0) < lifetime <= MAX_LIFETIME:
         raise ValueError(f"lifetime must be within (0, {MAX_LIFETIME}] (Cloud refuses longer)")
-    return {"timeout": lifetime, "on_timeout": on_timeout}
+    options: dict[str, Any] = {"timeout": lifetime, "on_timeout": on_timeout}
+    if on_timeout == "stop":
+        options["auto_resume"] = True
+    return options

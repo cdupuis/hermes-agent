@@ -9,14 +9,17 @@ Background and design: [README.md](README.md).
 
 ## What you need
 
-- A Docker account with **Cloud Sandboxes access, including volumes**.
+- A Docker account with **Cloud Sandboxes access, including volumes**. With the
+  AlwaysOn and Hibernate entitlements the sandbox stays up around the clock;
+  without them it sleeps once a day until something wakes it (see below).
 - A Docker **personal access token** (PAT) for that account
   (Docker Hub → Account settings → Personal access tokens).
-- An **Anthropic API key stored as a secret in that Docker account** (step 2).
-  OpenAI or OpenRouter secrets also work; Anthropic wins when several exist.
+- An **Anthropic, OpenAI or OpenRouter API key** (step 4). Anthropic wins when
+  several are set.
 - macOS or Linux with `git` and Node `^22.22`, `^24.11` or `>=26`.
   Python is provisioned for you by `./activate`.
-- The [`sbx` CLI](https://docs.docker.com/ai/sandboxes/cloud/) 0.42.0 or later.
+- Optional: the [`sbx` CLI](https://docs.docker.com/ai/sandboxes/cloud/) 0.42.0 or
+  later, for looking inside the sandbox.
 
 ## 1. Get the branch
 
@@ -26,25 +29,7 @@ cd hermes-agent
 git checkout docker-sandboxes
 ```
 
-## 2. Store your model key in your Docker account (once)
-
-The key never goes into Desktop or the sandbox: the sandbox gets a placeholder,
-and the Docker proxy swaps in the real key on its way to api.anthropic.com.
-Desktop refuses to create a gateway if your account has no
-`anthropic` / `openai` / `openrouter` cloud secret.
-
-With the [`sbx` CLI](https://docs.docker.com/ai/sandboxes/cloud/) (0.42.0 or later):
-
-```bash
-sbx login                              # same Docker account as in Desktop
-sbx --cloud diagnose                   # checks Cloud access for the account
-sbx --cloud secret set anthropic       # prompts for the key
-```
-
-`--cloud` matters: secrets stored for local sandboxes are not visible to cloud
-sandboxes. For OpenAI or OpenRouter, use `openai` or `openrouter` as the service.
-
-## 3. Run Hermes Desktop from the branch
+## 2. Run Hermes Desktop from the branch
 
 From the repository root, use an isolated Hermes home, so your normal
 `~/.hermes` is untouched:
@@ -61,7 +46,7 @@ HERMES_DESKTOP_PYTHON="$(command -v python3)" npm run dev --workspace apps/deskt
 it, Desktop can pick up an older installed Hermes, and the UI loops on
 "retry" (`hermes gateway ensure … exit 2` in the logs).
 
-## 4. Create the gateway
+## 3. Create the gateway
 
 1. In Desktop: **Settings → Gateways**.
 2. Pick the **Docker Cloud Sandboxes** card (between Hermes Cloud and Remote gateway).
@@ -70,20 +55,40 @@ it, Desktop can pick up an older installed Hermes, and the UI loops on
 The first run takes a few minutes, because Cloud pulls a ~1.5 GB image. The panel shows each
 step (volume → sandbox → starting → port → first boot → ready). When it
 finishes, Desktop switches to the new **Docker Sandbox** gateway, already
-signed in. Chat as usual: the model calls, tools and files all run in the sandbox.
+signed in.
+
+## 4. Add your model key
+
+In **Settings → Providers**, enter your Anthropic (or OpenAI / OpenRouter) API
+key, as for any gateway. For a Docker Sandbox gateway, Desktop does not send the
+key to the gateway: it stores it as a secret in your Docker account
+(`hermes-desktop:anthropic`), and the Docker proxy swaps it in on the way to the
+provider. The sandbox only ever sees a placeholder, so nothing the agent runs can
+read the key.
+
+Cloud attaches secrets only when it creates a sandbox, so the **first** key for a
+provider rebuilds the sandbox on the same volume: the save takes a minute or
+two, and the gateway reconnects by itself. Changing that key later updates the
+secret in place, without a rebuild. Then chat as usual: the model calls, tools and
+files all run in the sandbox.
+
+Secrets stored with `sbx --cloud secret set` cannot be used: Cloud refuses to
+attach them to a sandbox ("stored secret must be enrolled with an immutable
+resource identity"). Store the key through Desktop instead.
 
 ## What to expect
 
-- **24-hour sandboxes.** Cloud deletes a sandbox after at most 24 h. While
-  Desktop is running, it recreates the sandbox about 35 minutes before expiry
-  on the same volume, repoints the gateway and signs in again. It checks at
-  launch and then every 30 min. If Desktop was closed when the sandbox
-  expired, the launch recreates it: the gateway reconnects on its own after a
-  few minutes (the new sandbox has to boot), with no sign-in needed. Memory, skills, sessions and
-  cron jobs live on the volume (`Docker-Sandbox-hermes-home`), so nothing is lost.
-- **Scheduled jobs run in the cloud**, even when Desktop is closed, as long as
-  the sandbox exists. Jobs due while no sandbox exists (Desktop closed past
-  the 24 h mark) are missed.
+- **A daily hibernate.** A cycle lasts at most 24 h. At its end Cloud hibernates
+  the sandbox and, with the AlwaysOn and Hibernate entitlements, resumes it on
+  its own: a memory snapshot, so running processes, the address and the login all
+  survive, and the gateway is back within a minute or two. Without those
+  entitlements the sandbox stays asleep until something wakes it; Desktop resumes
+  it at launch and every 30 min while it runs. If the sandbox is ever lost,
+  Desktop rebuilds it on the same volume (`Docker-Sandbox-hermes-home`), so
+  memory, skills, sessions and cron jobs survive that too.
+- **Scheduled jobs run in the cloud**, even when Desktop is closed, while the
+  sandbox is awake: always with the entitlements, otherwise only until it goes
+  to sleep. Jobs due while it is hibernated are missed.
 - **Your PAT and the generated gateway password** are stored encrypted with
   the OS keychain in Desktop's user data (`docker-sandboxes.json`). If the
   keychain is unavailable, the panel tells you the gateway won't be kept alive.
@@ -104,13 +109,15 @@ hermes cron status                              # should say a gateway serves pr
 
 | Symptom | Likely cause |
 |---|---|
-| "no model secret" before anything is created | Step 2 not done for this Docker account. |
+| "No credentials" / the model never answers | No key yet: step 4. |
 | Create times out at *starting* | Cold image pull; click Create again (it reuses the volume). |
-| 401 from the model | The secret is not of service type `anthropic`/`openai`/`openrouter`. |
+| 401 from the model | The stored key is wrong: enter it again in Settings → Providers. |
+| `409 sandbox is hibernated` | Asleep (no AlwaysOn entitlement); restart Desktop to wake it. |
 | Login screen for the gateway | Session lapsed; wait for the keeper (≤ 30 min) or restart Desktop. |
 
 ## Cleaning up
 
-Remove the gateway in **Settings → Gateways**; Desktop then stops recreating
-it, and Cloud deletes the sandbox at its expiry (or delete it now with the `sbx` CLI).
-The volume and the secret stay in your account until you delete them.
+Remove the gateway in **Settings → Gateways**. Within 30 minutes (or at the next
+launch) Desktop deletes its sandbox, which no longer expires on its own, and stops
+looking after it. The volume and the `hermes-desktop:*` secrets stay in your
+account until you delete them; creating the gateway again picks the volume up.

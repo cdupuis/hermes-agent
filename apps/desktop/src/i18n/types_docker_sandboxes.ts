@@ -15,6 +15,8 @@ export interface DockerSandboxesTranslations {
   done: string
   doneSignInNeeded: string
   lifetimeNote: string
+  /** After creating a gateway that has no model key yet. */
+  addKey: string
   notKeptAlive: string
   failed: (step: string) => string
   unavailable: string

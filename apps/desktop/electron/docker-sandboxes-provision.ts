@@ -17,10 +17,17 @@
  *     the proxy swap the in-container sentinel for the key on egress, and
  *     Cloud set SBX_CRED_<SERVICE>_MODE, which the kit's credential script
  *     reads to keep the sentinel. Unattached, every model call 401s.
- *   - Lifetime is capped at 24h per sandbox, renewals included ("maximum of
- *     86400 seconds per session"), and with a volume attached `delete` is the only
- *     expiry action accepted (no hibernate, no restart). State lives on the
- *     volume, so an expired sandbox is recreated on it without loss.
+ *   - Only secrets created through the API attach: one stored by `sbx` is
+ *     refused ("stored secret must be enrolled with an immutable resource
+ *     identity", 2026-10-22). So the gateway attaches the secrets Desktop
+ *     itself stores (`hermes-desktop:<service>`, from Settings → Providers;
+ *     docker-sandboxes-provider-keys.ts), and none at all is fine: a gateway
+ *     created before any key is stored gets one later.
+ *   - With the volume attached exclusively, the sandbox hibernates in place.
+ *     A cycle lasts at most 24h; `restart` (AlwaysOn + Hibernate entitlements)
+ *     hibernates and resumes it at the end of each, keeping processes, memory
+ *     and the published URL. Without those entitlements `stop` + auto-resume
+ *     is the fallback: it sleeps at the deadline and wakes on demand.
  *   - The managed volume mounts root-owned; the kit re-owns it.
  *   - Volume display names are unique per account; an existing one is reused.
  *   - Sandbox-endpoint calls (files) answer resourceExhausted for a few seconds
@@ -36,7 +43,10 @@ export const HERMES_HOME_TARGET = '/home/agent/.hermes'
 export const LOGIN_FILE = `${HERMES_HOME_TARGET}/.sbx/desktop-login.json`
 // Read by the kit's hermes-serve-bootstrap.sh; not a secret.
 export const LOGIN_NONCE_ENV = 'HSBX_LOGIN_NONCE'
-export const MAX_LIFETIME_MS = 24 * 60 * 60 * 1000
+/** The longest cycle Cloud accepts ("timeout duration is outside the supported range" past it). */
+export const CYCLE_MS = 24 * 60 * 60 * 1000
+/** Display-name prefix of the secrets Desktop stores, the only ones it attaches. */
+export const OWNED_SECRET_PREFIX = 'hermes-desktop:'
 // The first create from a new image waits on a ~1.5 GB pull; 180s timed out live.
 const CREATE_TIMEOUT_MS = 600_000
 const RUNNING_TIMEOUT_MS = 300_000
@@ -68,10 +78,15 @@ export interface ProvisionResult {
   volume: string
   /** Service types of the stored secrets attached (e.g. `anthropic`). */
   credentials: string[]
+  /** What Cloud does at the end of each cycle: `restart` when the account allows it, else `stop`. */
+  onTimeout: TimeoutAction
 }
+
+export type TimeoutAction = 'restart' | 'stop'
 
 export interface StoredSecret {
   name: string
+  displayName: string
   serviceType: string
 }
 
@@ -90,7 +105,8 @@ export interface SandboxesApi {
     secrets: string[]
     /** Non-secret sandbox environment (the kit's login nonce). */
     environment: Record<string, string>
-    lifetimeMs: number
+    cycleMs: number
+    onTimeout: TimeoutAction
     idempotencyKey: string
     timeoutMs: number
   }): Promise<string>
@@ -100,15 +116,22 @@ export interface SandboxesApi {
   readFile(sandbox: string, path: string): Promise<null | string>
   removeFile(sandbox: string, path: string): Promise<void>
   deleteSandbox(sandbox: string): Promise<void>
+  /** Resume a hibernated sandbox and wait until it runs. */
+  startSandbox(sandbox: string, timeoutMs: number): Promise<void>
   /** The sandbox's status (`running`, `deleting`, …), or null when it no longer exists. */
   sandboxStatus(sandbox: string): Promise<null | string>
-  /** When Cloud will delete the sandbox (ms since epoch), or null when unknown. */
-  sandboxExpiresAt(sandbox: string): Promise<null | number>
   listSecrets(): Promise<StoredSecret[]>
+  /** Resolves to the new secret's resource name. */
+  createSecret(displayName: string, serviceType: string, value: string): Promise<string>
+  /** Cloud refuses a token update without its service type (seen live). */
+  updateSecret(name: string, serviceType: string, value: string): Promise<void>
+  deleteSecret(name: string): Promise<void>
   /** The volume carrying this display name, or null. */
   findVolume(displayName: string): Promise<null | string>
   isConflict(error: unknown): boolean
   isRateLimited(error: unknown): boolean
+  /** Cloud turned the request down (argument, entitlement), not a transport or quota failure. */
+  isRefused(error: unknown): boolean
 }
 
 export interface ProvisionDeps {
@@ -135,12 +158,18 @@ export class ProvisionError extends Error {
 /** The model-provider services the kit declares credentials for. */
 export const KIT_CREDENTIAL_SERVICES: readonly string[] = HERMES_SERVE_KIT.credentials.map(c => c.service)
 
-/** The account's stored secrets the kit can use, one per service (first wins). */
+export function ownedSecretName(service: string): string {
+  return `${OWNED_SECRET_PREFIX}${service}`
+}
+
+/** The secrets Desktop stored that the kit can use, one per service (first wins). */
 export function attachableSecrets(secrets: StoredSecret[]): StoredSecret[] {
   const picked = new Map<string, StoredSecret>()
 
   for (const secret of secrets) {
-    if (KIT_CREDENTIAL_SERVICES.includes(secret.serviceType) && !picked.has(secret.serviceType)) {
+    const owned = secret.displayName === ownedSecretName(secret.serviceType)
+
+    if (owned && KIT_CREDENTIAL_SERVICES.includes(secret.serviceType) && !picked.has(secret.serviceType)) {
       picked.set(secret.serviceType, secret)
     }
   }
@@ -235,36 +264,46 @@ export async function provisionHermesSandbox(input: ProvisionInput, deps: Provis
     deps.onStep?.(s)
   }
 
-  // Before anything is created: a gateway without a model credential is useless.
   const secrets = attachableSecrets(await api.listSecrets())
-
-  if (secrets.length === 0) {
-    throw new ProvisionError(
-      'volume',
-      `This Docker account has no stored ${KIT_CREDENTIAL_SERVICES.join(', ')} secret for the gateway to use. ` +
-        'Store a model provider key in the account first.'
-    )
-  }
 
   step('volume')
   const volume = await stateVolume(api, `${displayName}-hermes-home`, `hermes-desktop:${run}:volume`)
 
   step('sandbox')
 
-  const sandbox = await api.createSandbox({
-    displayName,
-    artifact: kitArtifact(input.image),
-    kitRef: HERMES_SERVE_KIT.manifest.name,
-    volume,
-    volumeTarget: HERMES_HOME_TARGET,
-    secrets: secrets.map(secret => secret.name),
-    // A fresh nonce makes the kit issue a new one-shot login even on an adopted
-    // volume whose backend was set up by an earlier sandbox.
-    environment: { [LOGIN_NONCE_ENV]: run },
-    lifetimeMs: MAX_LIFETIME_MS,
-    idempotencyKey: `hermes-desktop:${run}:sandbox`,
-    timeoutMs: CREATE_TIMEOUT_MS
-  })
+  const create = (onTimeout: TimeoutAction) =>
+    api.createSandbox({
+      displayName,
+      artifact: kitArtifact(input.image),
+      kitRef: HERMES_SERVE_KIT.manifest.name,
+      volume,
+      volumeTarget: HERMES_HOME_TARGET,
+      secrets: secrets.map(secret => secret.name),
+      // A fresh nonce makes the kit issue a new one-shot login even on an adopted
+      // volume whose backend was set up by an earlier sandbox.
+      environment: { [LOGIN_NONCE_ENV]: run },
+      cycleMs: CYCLE_MS,
+      onTimeout,
+      // Per action: Cloud refuses a replayed key whose body changed.
+      idempotencyKey: `hermes-desktop:${run}:sandbox:${onTimeout}`,
+      timeoutMs: CREATE_TIMEOUT_MS
+    })
+
+  let onTimeout: TimeoutAction = 'restart'
+  let sandbox: string
+
+  try {
+    sandbox = await create(onTimeout)
+  } catch (error) {
+    // `restart` needs the AlwaysOn and Hibernate entitlements; without them, sleep and wake on demand.
+    if (!api.isRefused(error)) {
+      throw error
+    }
+
+    onTimeout = 'stop'
+    // If `stop` is refused too, the refusal was about something else: report the first one.
+    sandbox = await create(onTimeout).catch(() => Promise.reject(error))
+  }
 
   try {
     step('starting')
@@ -280,7 +319,7 @@ export async function provisionHermesSandbox(input: ProvisionInput, deps: Provis
     step('ready')
     await waitReady(url, deps.httpStatus, { sleep, now })
 
-    return { url, ...login, sandbox, volume, credentials: secrets.map(secret => secret.serviceType) }
+    return { url, ...login, sandbox, volume, credentials: secrets.map(secret => secret.serviceType), onTimeout }
   } catch (error) {
     // A half-provisioned sandbox is useless and bills; the volume stays for a retry.
     await api.deleteSandbox(sandbox).catch(() => undefined)

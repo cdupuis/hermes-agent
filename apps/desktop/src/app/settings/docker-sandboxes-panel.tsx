@@ -122,6 +122,12 @@ export function DockerSandboxesPanel() {
         </Button>
       </div>
 
+      {result?.ok && result.needsKey ? (
+        <p className="mt-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-secondary)">
+          {d.addKey}
+        </p>
+      ) : null}
+
       {result?.ok && result.autoRecreate === false ? (
         <p className="mt-3 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-secondary)">
           {d.notKeptAlive}

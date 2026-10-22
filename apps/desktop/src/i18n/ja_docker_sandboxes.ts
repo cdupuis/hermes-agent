@@ -8,7 +8,7 @@ export const jaDockerSandboxes: DockerSandboxesTranslations = {
   usernameTitle: 'Docker Hub ユーザー名',
   usernameDesc: 'Cloud Sandboxes を利用できる Docker アカウント。',
   patTitle: '個人アクセストークン',
-  patDesc: 'Desktop が期限切れ前にサンドボックスを作り直せるよう、キーチェーンに保存します。',
+  patDesc: 'Desktop がサンドボックスを再開したり、失われた場合に再構築したりできるよう、キーチェーンに保存します。',
   provision: 'ゲートウェイを作成',
   provisioning: '作成中…',
   steps: {
@@ -23,7 +23,9 @@ export const jaDockerSandboxes: DockerSandboxesTranslations = {
   doneSignInNeeded:
     'Docker Sandbox ゲートウェイの準備ができました。行の「サインイン」から下のログイン情報で入ってください。',
   lifetimeNote:
-    'クラウドサンドボックスの寿命は最長 24 時間です。Desktop は期限切れ前に同じボリュームで作り直すため、ゲートウェイのメモリ、スキル、セッションは保持されます。',
+    'サンドボックスは 1 日 1 回休止し、同じアドレス、メモリ、スキル、セッションのまま自動で再開します。失われた場合は、Desktop が同じボリュームで再構築します。',
+  addKey:
+    '次に、設定 → プロバイダーでモデルキーを追加してください。キーは Docker アカウントのシークレットとして保存され、サンドボックスからは見えません。',
   notKeptAlive: 'このゲートウェイは自動で作り直されません。Hermes がトークンを安全に保存できませんでした。',
   failed: step => `ゲートウェイを作成できませんでした（${step}）。`,
   unavailable: 'このビルドの Hermes Desktop ではクラウドサンドボックスを作成できません。'

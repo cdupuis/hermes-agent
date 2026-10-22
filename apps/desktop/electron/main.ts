@@ -16524,7 +16524,11 @@ ipcMain.handle('hermes:api', async (_event, request) => {
     }
 
     if (!mutatingProfile) {
-      return await handleHermesApiRequest(request)
+      const dispatch = () => handleHermesApiRequest(request)
+      const connection = registryConnectionId ?? readDesktopConnectionsRegistry().primary ?? null
+      const routed = await dockerSandboxes.routeApiRequest(request, connection, dispatch)
+
+      return routed.handled ? routed.result : await dispatch()
     }
 
     const releaseProfileDeletion = profileDeletionGate.acquire(mutatingProfile)
@@ -17297,7 +17301,7 @@ registerChallengeWindowIpc({
 })
 
 // Docker Cloud Sandboxes card: provision a backend, register it as a cookie-auth remote, sign it in.
-registerDockerSandboxesIpc({
+const dockerSandboxes = registerDockerSandboxesIpc({
   saveConnection: input => saveRegistryConnection(input),
   findRemoteByLabel: label =>
     readDesktopConnectionsRegistry().connections.find(c => c.kind === 'remote' && c.label === label)?.id,

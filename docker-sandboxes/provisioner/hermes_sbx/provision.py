@@ -15,6 +15,8 @@ from hermes_sbx.state import BackendState
 
 LOGIN_FILE = "/home/agent/.hermes/.sbx/desktop-login.json"
 LOGIN_NONCE_ENV = "HSBX_LOGIN_NONCE"  # read by the kit's hermes-serve-bootstrap.sh; not a secret
+# Display-name prefix of the secrets Hermes Desktop stores (Settings → Providers), shared with it.
+OWNED_SECRET_PREFIX = "hermes-desktop:"
 DEFAULT_VOLUME_TARGET = "/home/agent/.hermes"
 DEFAULT_PORT = 9119
 
@@ -103,6 +105,10 @@ class Provisioner:
                 **request, request_id=self._request_id(cfg.name, f"sandbox:{_digest(request)}"))
             self._log(f"created sandbox {state.sandbox}")
 
+        if self._backend.status(state.sandbox).lower().endswith("stopped"):
+            # Hibernated at the end of a cycle: resume it in place, same URL and state.
+            self._backend.start(state.sandbox, timeout=cfg.wait_timeout)
+            self._log(f"resumed {state.sandbox}")
         self._backend.wait_running(state.sandbox, timeout=cfg.wait_timeout)
 
         if not state.url:
@@ -122,18 +128,20 @@ class Provisioner:
     def _secrets_to_attach(self, state: BackendState, kit: dict) -> list[str]:
         """Declaring a credential in the kit is not enough: the account's stored secret must be
         attached at create, or the proxy injects nothing and every model call 401s (seen live).
-        With no explicit secret, attach the account's own, one per service the kit declares."""
+        Only API-created secrets attach: one stored by `sbx` is refused ("stored secret must be
+        enrolled with an immutable resource identity", 2026-10-22). So with no explicit secret,
+        attach the ones Hermes Desktop stored (`hermes-desktop:<service>`), one per kit service."""
         if state.secret:
             return [state.secret]
         services = [c["service"] for c in kit.get("credentials", [])]
         picked: dict[str, str] = {}
-        for name, service in self._backend.list_secrets():
-            if service in services and service not in picked:
+        for name, service, display_name in self._backend.list_secrets():
+            if service in services and service not in picked and display_name == f"{OWNED_SECRET_PREFIX}{service}":
                 picked[service] = name
         if not picked:
             raise ProvisionError(
-                f"this Docker account has no stored {', '.join(services)} secret for the gateway to use; "
-                "store one, or pass --store-key-env ANTHROPIC_API_KEY")
+                f"this Docker account has no {', '.join(services)} secret Hermes stored for the gateway; "
+                "pass --store-key-env ANTHROPIC_API_KEY (secrets stored by `sbx` cannot be attached)")
         self._log(f"attaching the account's {', '.join(picked)} secret(s)")
         return list(picked.values())
 

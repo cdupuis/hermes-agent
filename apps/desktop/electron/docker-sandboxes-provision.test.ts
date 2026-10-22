@@ -8,6 +8,7 @@ import { HERMES_SERVE_KIT } from './docker-sandboxes-kit'
 import {
   attachableSecrets,
   BACKEND_PORT,
+  CYCLE_MS,
   DEFAULT_GATEWAY_NAME,
   DEFAULT_HERMES_SERVE_IMAGE,
   HERMES_HOME_TARGET,
@@ -15,7 +16,7 @@ import {
   kitArtifact,
   LOGIN_FILE,
   LOGIN_NONCE_ENV,
-  MAX_LIFETIME_MS,
+  ownedSecretName,
   parseLogin,
   ProvisionError,
   provisionHermesSandbox,
@@ -27,6 +28,8 @@ import {
 class RateLimited extends Error {}
 
 class Conflict extends Error {}
+
+class Refused extends Error {}
 
 function fakeApi(overrides: Partial<SandboxesApi> = {}) {
   const calls: Array<[string, ...unknown[]]> = []
@@ -45,16 +48,20 @@ function fakeApi(overrides: Partial<SandboxesApi> = {}) {
     },
     removeFile: async (...args) => void calls.push(['removeFile', ...args]),
     deleteSandbox: async (...args) => void calls.push(['deleteSandbox', ...args]),
+    startSandbox: async (...args) => void calls.push(['startSandbox', ...args]),
     sandboxStatus: async () => 'running',
-    sandboxExpiresAt: async () => null,
     findVolume: async (...args) => (calls.push(['findVolume', ...args]), null),
     listSecrets: async () => [
-      { name: 'secrets/docker', serviceType: 'docker' },
-      { name: 'secrets/anthropic', serviceType: 'anthropic' },
-      { name: 'secrets/openai', serviceType: 'openai' }
+      { name: 'secrets/docker', displayName: 'docker', serviceType: 'docker' },
+      { name: 'secrets/anthropic', displayName: ownedSecretName('anthropic'), serviceType: 'anthropic' },
+      { name: 'secrets/openai', displayName: ownedSecretName('openai'), serviceType: 'openai' }
     ],
+    createSecret: async (...args) => (calls.push(['createSecret', ...args]), 'secrets/new'),
+    updateSecret: async (...args) => void calls.push(['updateSecret', ...args]),
+    deleteSecret: async (...args) => void calls.push(['deleteSecret', ...args]),
     isConflict: error => error instanceof Conflict,
     isRateLimited: error => error instanceof RateLimited,
+    isRefused: error => error instanceof Refused,
     ...overrides
   }
 
@@ -81,7 +88,8 @@ test('provision: creates the volume, the sandbox on it, publishes 9119 and retur
     password: 'pw-1',
     sandbox: 'sandboxes/s1',
     volume: 'volumes/v1',
-    credentials: ['anthropic', 'openai']
+    credentials: ['anthropic', 'openai'],
+    onTimeout: 'restart'
   })
   assert.deepEqual(steps, ['volume', 'sandbox', 'starting', 'port', 'login', 'ready'])
   assert.deepEqual(calls[0], ['createVolume', 'My-Cloud-hermes-home', 'hermes-desktop:run1:volume'])
@@ -91,7 +99,9 @@ test('provision: creates the volume, the sandbox on it, publishes 9119 and retur
   assert.equal(create.volumeTarget, HERMES_HOME_TARGET)
   // The kit's declared providers only, and attached: without that the proxy injects nothing.
   assert.deepEqual(create.secrets, ['secrets/anthropic', 'secrets/openai'])
-  assert.equal(create.lifetimeMs, MAX_LIFETIME_MS)
+  // Hibernate and resume in place at the end of each (longest allowed) cycle.
+  assert.equal(create.cycleMs, CYCLE_MS)
+  assert.equal(create.onTimeout, 'restart')
   assert.deepEqual(create.environment, { [LOGIN_NONCE_ENV]: 'run1' })
   assert.equal(create.kitRef, 'hermes-serve')
   assert.equal(JSON.parse(new TextDecoder().decode(create.artifact)).manifest.template, DEFAULT_HERMES_SERVE_IMAGE)
@@ -206,7 +216,7 @@ test('the embedded kit is the Go-reference golden of docker-sandboxes/kit', () =
   assert.deepEqual(HERMES_SERVE_KIT, golden)
 })
 
-test('provision: a name whose volume already exists adopts it (how an expired gateway comes back)', async () => {
+test('provision: a name whose volume already exists adopts it (how a deleted gateway comes back)', async () => {
   const { api, calls } = fakeApi({
     createVolume: async () => Promise.reject(new Conflict('alreadyExists')),
     findVolume: async name => (name === 'My-Cloud-hermes-home' ? 'volumes/kept' : null)
@@ -224,25 +234,66 @@ test('provision: other volume failures are not mistaken for an existing volume',
   await assert.rejects(provisionHermesSandbox(input, { api, httpStatus: async () => 200, ...quick }), /quota/)
 })
 
-test('provision: an account without a model secret is refused before anything is created', async () => {
-  const { api, calls } = fakeApi({ listSecrets: async () => [{ name: 'secrets/docker', serviceType: 'docker' }] })
-  const failure = await provisionHermesSandbox(input, { api, httpStatus: async () => 200, ...quick }).catch(e => e)
+test('provision: a gateway without any stored key is still created; the key comes later', async () => {
+  const { api, calls } = fakeApi({
+    listSecrets: async () => [{ name: 'secrets/docker', displayName: 'docker', serviceType: 'docker' }]
+  })
 
-  assert.ok(failure instanceof ProvisionError)
-  assert.match(failure.message, /no stored anthropic, openai, openrouter secret/)
-  assert.deepEqual(
-    calls.map(c => c[0]),
-    []
+  const result = await provisionHermesSandbox(input, { api, httpStatus: async () => 200, ...quick })
+
+  assert.deepEqual(result.credentials, [])
+  assert.deepEqual((calls.find(c => c[0] === 'createSandbox')![1] as { secrets: string[] }).secrets, [])
+})
+
+test('provision: an account without the restart entitlement gets a sandbox that sleeps and wakes on demand', async () => {
+  const actions: string[] = []
+
+  const { api } = fakeApi({
+    createSandbox: async request => {
+      actions.push(request.onTimeout)
+
+      if (request.onTimeout === 'restart') {
+        throw new Refused('needs AlwaysOn and Hibernate')
+      }
+
+      return 'sandboxes/s1'
+    }
+  })
+
+  const result = await provisionHermesSandbox(input, { api, httpStatus: async () => 200, ...quick })
+
+  assert.deepEqual(actions, ['restart', 'stop'])
+  assert.equal(result.onTimeout, 'stop')
+})
+
+test('provision: a refusal that is not about the timeout action reports the original reason', async () => {
+  const { api } = fakeApi({
+    createSandbox: async request => Promise.reject(new Refused(`bad request (${request.onTimeout})`))
+  })
+
+  await assert.rejects(
+    provisionHermesSandbox(input, { api, httpStatus: async () => 200, ...quick }),
+    /bad request \(restart\)/
   )
 })
 
-test('attachableSecrets: one secret per declared service, first wins', () => {
+test('provision: a create failure that is not a refusal is not retried as stop', async () => {
+  let creates = 0
+  const { api } = fakeApi({ createSandbox: async () => (creates++, Promise.reject(new Error('network down'))) })
+
+  await assert.rejects(provisionHermesSandbox(input, { api, httpStatus: async () => 200, ...quick }), /network down/)
+  assert.equal(creates, 1)
+})
+
+test('attachableSecrets: only the secrets Desktop stored, one per declared service', () => {
   assert.deepEqual(
     attachableSecrets([
-      { name: 'a1', serviceType: 'anthropic' },
-      { name: 'a2', serviceType: 'anthropic' },
-      { name: 'g', serviceType: 'github' },
-      { name: 'r', serviceType: 'openrouter' }
+      // Stored by `sbx`: Cloud refuses to attach these ("immutable resource identity").
+      { name: 'sbx', displayName: 'docker-sbx:anthropic', serviceType: 'anthropic' },
+      { name: 'a1', displayName: ownedSecretName('anthropic'), serviceType: 'anthropic' },
+      { name: 'a2', displayName: ownedSecretName('anthropic'), serviceType: 'anthropic' },
+      { name: 'g', displayName: ownedSecretName('github'), serviceType: 'github' },
+      { name: 'r', displayName: ownedSecretName('openrouter'), serviceType: 'openrouter' }
     ]).map(s => s.name),
     ['a1', 'r']
   )

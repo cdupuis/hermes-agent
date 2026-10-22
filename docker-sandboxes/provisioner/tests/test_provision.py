@@ -26,7 +26,12 @@ class FakeBackend:
         self.calls.append(("create_secret", kw))
         return "secrets/s1"
 
-    account_secrets = [("secrets/acct-anthropic", "anthropic"), ("secrets/acct-docker", "docker")]
+    account_secrets = [
+        # Stored by `sbx`: Cloud refuses to attach it ("immutable resource identity").
+        ("secrets/sbx-anthropic", "anthropic", "docker-sbx:anthropic"),
+        ("secrets/acct-anthropic", "anthropic", "hermes-desktop:anthropic"),
+        ("secrets/acct-docker", "docker", "docker"),
+    ]
 
     def list_secrets(self):
         self.calls.append(("list_secrets",))
@@ -67,6 +72,10 @@ class FakeBackend:
 
     def status(self, name):
         return self.status_value
+
+    def start(self, name, *, timeout):
+        self.calls.append(("start", name))
+        self.status_value = "running"
 
     gone: set = set()
 
@@ -241,7 +250,7 @@ def test_each_new_sandbox_carries_a_login_nonce_that_a_retry_reuses():
     assert "login_nonce" not in state.extra  # consumed once the login was read
 
 
-def test_without_an_explicit_secret_the_accounts_own_is_attached():
+def test_without_an_explicit_secret_the_one_hermes_desktop_stored_is_attached():
     backend = FakeBackend()
     _prov(backend).up(_cfg(anthropic_api_key=None))
     created = next(c[1] for c in backend.calls if c[0] == "create_sandbox")
@@ -250,7 +259,17 @@ def test_without_an_explicit_secret_the_accounts_own_is_attached():
 
 def test_an_account_without_a_model_secret_is_refused_before_the_sandbox():
     backend = FakeBackend()
-    backend.account_secrets = [("secrets/acct-docker", "docker")]
-    with pytest.raises(ProvisionError, match="no stored anthropic"):
+    backend.account_secrets = [("secrets/sbx-anthropic", "anthropic", "docker-sbx:anthropic")]
+    with pytest.raises(ProvisionError, match="cannot be attached"):
         _prov(backend).up(_cfg(anthropic_api_key=None))
     assert not any(c[0] in ("create_volume", "create_sandbox") for c in backend.calls)
+
+
+def test_up_resumes_a_hibernated_sandbox_in_place():
+    backend = FakeBackend()
+    state = _prov(backend).up(_cfg())
+    backend.calls.clear()
+    backend.status_value = "SandboxStatus.STOPPED"
+    _prov(backend).up(_cfg(), state)
+    assert ("start", state.sandbox) in backend.calls
+    assert "create_sandbox" not in backend.names()

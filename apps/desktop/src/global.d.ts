@@ -1406,8 +1406,10 @@ export interface DesktopDockerSandboxesProvisionResult {
   connectionId?: string
   url?: string
   signedIn?: boolean
-  /** Whether Desktop renews the sandbox and recreates it after expiry. */
+  /** Whether Desktop keeps the sandbox alive: wakes it, rebuilds it if lost. */
   autoRecreate?: boolean
+  /** No model key is attached yet; one is added in Settings → Providers. */
+  needsKey?: boolean
   step?: DesktopDockerSandboxesStep
   error?: string
 }

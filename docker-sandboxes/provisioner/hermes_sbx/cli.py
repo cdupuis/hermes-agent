@@ -37,10 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="store the Anthropic key found in ENV_VAR as a sandbox secret and attach it")
     up.add_argument("--secret", default=None, help="attach an existing secrets/{id}")
     up.add_argument("--lifetime-hours", type=float, default=24,
-                    help="sandbox lifetime before --on-timeout applies (default and Cloud maximum: 24h)")
-    up.add_argument("--on-timeout", choices=sdk.TIMEOUT_ACTIONS, default="delete",
-                    help="what expiry does to the sandbox (default delete, the only action Cloud allows with a "
-                         "volume; the volume survives and `up` recreates the sandbox on it)")
+                    help="length of one cycle before --on-timeout applies (default and Cloud maximum: 24h)")
+    up.add_argument("--on-timeout", choices=sdk.TIMEOUT_ACTIONS, default="restart",
+                    help="what the end of a cycle does (default restart: hibernate and resume in place, which "
+                         "needs the AlwaysOn and Hibernate entitlements; stop: hibernate until woken)")
     up.add_argument("--wait-timeout", type=float, default=600.0)
     up.add_argument("--json", action="store_true", help="print the connection as JSON")
 

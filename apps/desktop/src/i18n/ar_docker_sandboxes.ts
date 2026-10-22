@@ -8,7 +8,7 @@ export const arDockerSandboxes: DockerSandboxesTranslations = {
   usernameTitle: 'اسم مستخدم Docker Hub',
   usernameDesc: 'حساب Docker الذي لديه وصول إلى Cloud Sandboxes.',
   patTitle: 'رمز الوصول الشخصي',
-  patDesc: 'يُحفظ في سلسلة المفاتيح ليتمكن Desktop من إعادة إنشاء بيئة الحماية قبل انتهائها.',
+  patDesc: 'يُحفظ في سلسلة المفاتيح ليتمكن Desktop من إيقاظ بيئة الحماية وإعادة بنائها إذا فُقدت.',
   provision: 'إنشاء البوابة',
   provisioning: 'جارٍ الإنشاء…',
   steps: {
@@ -22,7 +22,9 @@ export const arDockerSandboxes: DockerSandboxesTranslations = {
   done: 'بوابة Docker Sandbox جاهزة ومسجّل الدخول إليها.',
   doneSignInNeeded: 'بوابة Docker Sandbox جاهزة. استخدم تسجيل الدخول في صفها ببيانات الدخول أدناه.',
   lifetimeNote:
-    'تدوم بيئات الحماية السحابية 24 ساعة على الأكثر. يعيد Desktop إنشاء هذه البيئة على وحدة التخزين نفسها قبل انتهائها، فتحتفظ البوابة بذاكرتها ومهاراتها وجلساتها.',
+    'تدخل بيئة الحماية في السبات مرة يوميًا وتستأنف تلقائيًا بالعنوان نفسه والذاكرة والمهارات والجلسات نفسها. وإذا فُقدت، يعيد Desktop بناءها على وحدة التخزين نفسها.',
+  addKey:
+    'بعد ذلك، أضف مفتاح نموذج من الإعدادات ← المزوّدون. يُخزَّن كسرّ في حساب Docker الخاص بك، ولا تراه بيئة الحماية أبدًا.',
   notKeptAlive: 'لن تُعاد إنشاء هذه البوابة تلقائيًا: تعذّر على Hermes حفظ الرمز بأمان.',
   failed: step => `تعذّر إنشاء البوابة (${step}).`,
   unavailable: 'لا يمكن لهذا الإصدار من Hermes Desktop إنشاء بيئات حماية سحابية.'

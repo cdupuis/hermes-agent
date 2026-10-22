@@ -33,10 +33,12 @@ export async function createSandboxesApi(
             resources: 'small',
             kits: [{ artifact: { ref: { ref: input.kitRef, kind: 'sandbox' }, inline: input.artifact } }],
             storage: {
-              volumes: [{ volume: input.volume, target: input.volumeTarget }],
-              secrets: input.secrets
+              // Exclusive is what lets a volume-backed sandbox hibernate (seen live, 2026-10-22).
+              volumes: [{ volume: input.volume, target: input.volumeTarget, mode: 'exclusive' }],
+              // An empty list is refused ("repeated.min_items", seen live): omit it instead.
+              ...(input.secrets.length ? { secrets: input.secrets } : {})
             },
-            lifecycle: { timeoutMs: input.lifetimeMs, onTimeout: 'delete' }
+            lifecycle: { timeoutMs: input.cycleMs, onTimeout: input.onTimeout, autoResume: input.onTimeout === 'stop' }
           } as any,
           { idempotencyKey: input.idempotencyKey, timeoutMs: input.timeoutMs } as any
         )
@@ -74,20 +76,30 @@ export async function createSandboxesApi(
         throw error
       }
     },
-    sandboxExpiresAt: async name => {
-      const expiresAt = (await get(name)).effectiveFeatures?.timeouts?.expiresAt
-      const ms = expiresAt ? new Date(expiresAt as unknown as string).getTime() : NaN
-
-      return Number.isFinite(ms) ? ms : null
-    },
     deleteSandbox: async name => {
       await (await get(name)).delete({ force: true } as any)
+    },
+    // Every mutation re-reads the sandbox: an older handle's etag fails after any change (seen live).
+    startSandbox: async (name, timeoutMs) => {
+      await (await (await get(name)).start({ timeoutMs })).waitUntilRunning({ timeoutMs })
+    },
+    createSecret: async (displayName, serviceType, value) =>
+      (await client.secrets.create({ displayName, serviceType, token: { value } })).name,
+    updateSecret: async (name, serviceType, value) => {
+      await (await client.secrets.get(name)).update({ serviceType, token: { value } } as any)
+    },
+    deleteSecret: async name => {
+      await (await client.secrets.get(name)).delete()
     },
     listSecrets: async () => {
       const found = []
 
       for await (const secret of client.secrets.all()) {
-        found.push({ name: secret.name, serviceType: String(secret.serviceType ?? '') })
+        found.push({
+          name: secret.name,
+          displayName: String(secret.displayName ?? ''),
+          serviceType: String(secret.serviceType ?? '')
+        })
       }
 
       return found
@@ -102,6 +114,10 @@ export async function createSandboxesApi(
       return null
     },
     isConflict: error => error instanceof sdk.ConflictError,
+    // A request Cloud turned down (bad argument, missing entitlement), as opposed to a transport or quota failure.
+    isRefused: error =>
+      error instanceof sdk.RequestError &&
+      [400, 403, 409, 412].includes(Number((error as { httpStatus?: unknown }).httpStatus)),
     isRateLimited: error => error instanceof sdk.RateLimitError || hasCode(error, 'resourceExhausted', 429)
   }
 

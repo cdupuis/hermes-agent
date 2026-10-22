@@ -8,7 +8,7 @@ export const deDockerSandboxes: DockerSandboxesTranslations = {
   usernameTitle: 'Docker-Hub-Benutzername',
   usernameDesc: 'Das Docker-Konto mit Zugriff auf Cloud Sandboxes.',
   patTitle: 'Persönliches Zugriffstoken',
-  patDesc: 'Im Schlüsselbund gespeichert, damit Desktop die Sandbox vor Ablauf neu erstellen kann.',
+  patDesc: 'Im Schlüsselbund gespeichert, damit Desktop die Sandbox wecken und bei Verlust neu aufbauen kann.',
   provision: 'Gateway erstellen',
   provisioning: 'Wird erstellt…',
   steps: {
@@ -23,7 +23,9 @@ export const deDockerSandboxes: DockerSandboxesTranslations = {
   doneSignInNeeded:
     'Ihr Docker-Sandbox-Gateway ist bereit. Nutzen Sie Anmelden in seiner Zeile mit den Zugangsdaten unten.',
   lifetimeNote:
-    'Cloud-Sandboxes laufen höchstens 24 Stunden. Desktop erstellt diese vor Ablauf auf demselben Volume neu; das Gateway behält Gedächtnis, Skills und Sitzungen.',
+    'Die Sandbox geht einmal am Tag in den Ruhezustand und setzt sich selbst fort, mit derselben Adresse, demselben Gedächtnis, denselben Skills und Sitzungen. Geht sie verloren, baut Desktop sie auf demselben Volume neu auf.',
+  addKey:
+    'Füge als Nächstes unter Einstellungen → Anbieter einen Modellschlüssel hinzu. Er wird als Secret in deinem Docker-Konto gespeichert; die Sandbox sieht ihn nie.',
   notKeptAlive: 'Dieses Gateway wird nicht automatisch neu erstellt: Hermes konnte Ihr Token nicht sicher speichern.',
   failed: step => `Das Gateway konnte nicht erstellt werden (${step}).`,
   unavailable: 'Diese Version von Hermes Desktop kann keine Cloud-Sandboxes erstellen.'
